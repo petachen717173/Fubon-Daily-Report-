@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>業績日報 · 成交歸戶</title>
+<title>Fubon Daily Report</title>
 <meta name="color-scheme" content="light dark">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=Noto+Sans+TC:wght@400;500;700&display=swap" rel="stylesheet">
@@ -179,12 +179,18 @@ table.brk tr.sep td{border-top:2px solid var(--ink)}
 #brkMapBox{margin-top:6px}
 #brkMapBox details{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:10px 16px}
 #brkMapBox summary{cursor:pointer;font-weight:600}
+
+.tab.peta{margin-left:10px;border:1px solid var(--line)!important;border-radius:6px 6px 0 0;background:var(--sunk);color:var(--ink);font-weight:600;font-size:13px}
+.tab.peta[aria-selected="true"]{background:var(--accent-soft);border-color:var(--accent)!important;border-bottom-color:var(--accent-soft)!important}
+.subtabs{display:flex;gap:2px;flex-wrap:wrap;background:var(--accent-soft);border:1px solid var(--accent);border-radius:0 8px 8px 8px;padding:4px 6px;margin:-15px 0 14px}
+.subtabs .tab{font-size:13px;padding:7px 12px}
+.subtabs[hidden],[hidden]{display:none!important}
 </style>
 </head>
 <body>
 <div class="wrap">
 <header>
-  <div><h1>業績日報 · 成交歸戶</h1><div class="sub">Trade Confirm 為準，回溯 DMA / FOMS / K Way 下單檔歸戶，並修正 0.1425% 預設手收</div></div>
+  <div><h1>Fubon Daily Report</h1><div class="sub">Trade Confirm 為準，回溯 DMA / FOMS / K Way 下單檔歸戶，並修正 0.1425% 預設手收</div></div>
   <div class="daybox"><label for="daySel">交易日</label><select id="daySel"></select><span id="saveStat"></span></div>
 </header>
 <div class="warn" id="saveWhy" hidden></div>
@@ -208,6 +214,9 @@ table.brk tr.sep td{border-top:2px solid var(--ink)}
     <button class="tab" role="tab" data-p="report" aria-selected="true">報表</button>
     <button class="tab" role="tab" data-p="rank">本日排名</button>
     <button class="tab" role="tab" data-p="todo">待人工確認</button>
+    <button class="tab peta" role="tab" data-p="peta" aria-expanded="false">peta ▾</button>
+  </div>
+  <div class="subtabs" id="subtabs" hidden>
     <button class="tab" role="tab" data-p="fix">手收修正</button>
     <button class="tab" role="tab" data-p="detail">全部明細</button>
     <button class="tab" role="tab" data-p="rebate">Rebate</button>
@@ -630,11 +639,18 @@ function renderMap(){
   $('#mapImport').addEventListener('change',async e=>{try{const j=JSON.parse(await e.target.files[0].text());savedMap={...savedMap,...(j.acmap||{})};alias={...alias,...(j.alias||{})};if(j.rebateRules){rules=j.rebateRules;saveRules();}if(j.exchRate!==undefined){exchRate=j.exchRate;store.set('exchRate',exchRate);}store.set('acmap',savedMap);store.set('alias',alias);recompute();showTab('map');$('#msg2').textContent='對照表已匯入。';}catch(err){$('#msg2').textContent='匯入失敗：檔案格式不對。';}});
 }
 
+const SUB=['fix','detail','rebate','month','map','db']; let lastSub='fix';
 function showTab(p){
-  document.querySelectorAll('.tab').forEach(t=>t.setAttribute('aria-selected',t.dataset.p===p));
+  if(p==='peta') p=lastSub;
+  const sub=SUB.includes(p); if(sub) lastSub=p;
+  document.querySelectorAll('#tabs .tab').forEach(t=>t.setAttribute('aria-selected',t.dataset.p===p||(sub&&t.dataset.p==='peta')));
+  document.querySelectorAll('#subtabs .tab').forEach(t=>t.setAttribute('aria-selected',t.dataset.p===p));
+  $('#subtabs').hidden=!sub; document.querySelector('.tab.peta').setAttribute('aria-expanded',sub);
+  document.querySelector('.tab.peta').textContent=sub?'peta ▴':'peta ▾';
   document.querySelectorAll('.panel').forEach(x=>x.classList.toggle('on',x.id==='p-'+p));
 }
-$('#tabs').addEventListener('click',e=>{const t=e.target.closest('.tab');if(t)showTab(t.dataset.p)});
+$('#tabs').addEventListener('click',e=>{const t=e.target.closest('.tab');if(!t)return; if(t.dataset.p==='peta'&&!$('#subtabs').hidden){showTab('report');return;} showTab(t.dataset.p);});
+$('#subtabs').addEventListener('click',e=>{const t=e.target.closest('.tab');if(t)showTab(t.dataset.p)});
 
 $('#png').addEventListener('click',()=>reportPng().catch(e=>{$('#msg2').textContent='圖片產生失敗：'+e.message}));
 
@@ -765,7 +781,7 @@ function renderInputs(R){
     <label>Exchange fee${inp('m.exch',m.exch)}</label><label>Rebate 手動覆寫（留空＝依規則）${inp('m.rebate',m.rebate,f0(calcRebate().total))}</label><span></span>
     <label>其他成交值調整（億）${inp('m.adjTurn',m.adjTurn,'0')}</label><label>其他手收調整${inp('m.adjComm',m.adjComm,'0')}</label>
   </div><p class="note">調整欄位給 conf 以外的成交用（例如鉅額）。本日成交值 = 工具算出 ${f2(totals().gross/1e8)} 億 + 調整；手收 = 修正後 ${f0(totals().c1)} + 調整。</p></details>
-  <details><summary>目標值（記住，改了才會變）</summary><div class="grid">
+  <details><summary>目標值</summary><div class="grid">
     <label>市佔率目標（bps）${inp('t.share',targets.share)}</label><label>FINI 市佔率目標（bps）${inp('t.fini',targets.fini)}</label><span></span>
     <label>每日交易值目標（億）${inp('t.turnD',targets.turnD)}</label><label>每日手收目標${inp('t.commD',targets.commD)}</label><label>每億手收目標（自動）<input type="text" disabled value="${targets.turnD?f0(targets.commD/targets.turnD):''}"></label>
   </div></details>
@@ -1013,6 +1029,7 @@ async function loadDay(d){
   let s=null; try{s=await IDB.get(d);}catch(e){}
   if(!s){ $('#msg').className='msg err'; $('#msg').textContent=`${d} 只有存當時的摘要（舊版工具存的），沒有明細可以開啟。重新上傳那天的檔案即可補齊。`; fillDaySel(); return; }
   loading=true; applySnap(s); recompute(); loading=false;
+  {const days=db(); days[d]=daySummary(); store.set('days',days); renderDB();}
   $('#out').hidden=false;
   const f=s.files||{}; ['conf','lt','ht','xp'].forEach(k=>{const sl=document.querySelector(`input[data-k="${k}"]`).parentElement; sl.classList.remove('done'); sl.querySelector('.fn').textContent=f[k]?`已存：${f[k]}`:sl.dataset.ph;});
   Object.keys(wbs).forEach(k=>delete wbs[k]); $('#run').disabled=true;
