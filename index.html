@@ -384,12 +384,36 @@ function runMatch(conf, orders, savedMap) {
   partyEntries.forEach(e => { (groups[e.sym + '|' + e.bs] = groups[e.sym + '|' + e.bs] || []).push(e); });
   const saved = ac => savedMap[ac];
 
+  // A2. name match: account name contains the client's name (e.g. "Banque Pictet" -> Pictet)
+  const norm = t => ' ' + String(t || '').toLowerCase().replace(/[^a-z0-9&]+/g, ' ').trim() + ' ';
+  Object.entries(groups).forEach(([g, ents]) => {
+    ents.slice().sort((a, b) => norm(b.party).length - norm(a.party).length).forEach(e => {
+      const ph = norm(e.party); if (ph.trim().length < 3 || e.rem <= 0) return;
+      rows.filter(r => r.sym + '|' + r.bs === g && r.rem > 0 && norm(r.name).includes(ph))
+        .sort((a, b) => b.rem - a.rem)
+        .forEach(r => { if (e.rem > 0) consume(r, e, Math.min(r.rem, e.rem), 'name'); });
+    });
+  });
+  // A3. distinctive first word of the client name (e.g. "M&G INVT" -> "M&G (Lux) ...", "Russell Investment" -> "Russell Investments ...")
+  const STOP = new Set(['capital','group','american','global','first','the','national','asset','assets','investment','investments','fund','funds','bank','state','united','international','new','all','jp','sec','securities','china','asia','delta','emerging','market','markets','equity']);
+  Object.entries(groups).forEach(([g, ents]) => {
+    ents.forEach(e => {
+      if (e.rem <= 0) return;
+      const w = norm(e.party).trim().split(' ')[0];
+      if (!w || w.length < 3 || STOP.has(w)) return;
+      rows.filter(r => r.sym + '|' + r.bs === g && r.rem > 0 && norm(r.name).includes(' ' + w + ' '))
+        .sort((a, b) => b.rem - a.rem)
+        .forEach(r => { if (e.rem > 0) consume(r, e, Math.min(r.rem, e.rem), 'name'); });
+    });
+  });
   // B. exact subset per party
   Object.entries(groups).forEach(([g, ents]) => {
     ents.sort((a, b) => b.rem - a.rem);
     ents.forEach(e => {
-      const cand = rows.filter(r => r.sym + '|' + r.bs === g && r.rem > 0 && r.rem === r.sh);
-      cand.sort((a, b) => ((saved(b.ac) === e.party) - (saved(a.ac) === e.party)));
+      const cand = rows.filter(r => r.sym + '|' + r.bs === g && r.rem > 0);
+      const toks = norm(e.party).trim().split(' ').filter(t => t.length >= 3);
+      const score = r => (saved(r.ac) === e.party ? 100 : 0) + ((assoc[r.ac] && assoc[r.ac].has(e.party)) ? 50 : 0) + toks.filter(t => norm(r.name).includes(' ' + t + ' ')).length;
+      cand.sort((a, b) => score(b) - score(a));
       const pick = subsetSum(cand.map(r => r.rem), e.rem);
       if (pick) pick.forEach(i => consume(cand[i], e, cand[i].rem, 'exact'));
     });
@@ -401,6 +425,15 @@ function runMatch(conf, orders, savedMap) {
       rows.filter(r => r.sym + '|' + r.bs === g && r.rem > 0 && ((assoc[r.ac] && assoc[r.ac].has(e.party)) || saved(r.ac) === e.party))
         .forEach(r => { if (e.rem > 0) consume(r, e, Math.min(r.rem, e.rem), 'affinity'); });
     });
+  });
+  // D. direct account traded more than its own order file shows (e.g. a second basket): the client is certain, keep the same client & channel
+  rows.forEach(r => {
+    if (r.rem <= 0) return;
+    const d = r.allocs.filter(a => a.how === 'direct');
+    if (!d.length) return;
+    const main = d.slice().sort((a, b) => b.qty - a.qty)[0];
+    r.allocs.push({ party: main.party, src: main.src, qty: r.rem, how: 'direct+', tags: main.tags || '' });
+    r.rem = 0;
   });
   const leftovers = [...pool.values()].filter(e => e.rem > 0);
   return { rows, assoc, leftovers };
@@ -466,12 +499,28 @@ async function saveFile(filename,blob,sayEl){
 }
 
 const files={}; const wbs={};
+const BIGKEY=/^(days$|mktHist$|mkt:|brk:|mkfetch:)/;   // 會越存越多的資料：放 IndexedDB（空間大），不放 localStorage（只有 5 MB 且同網域共用）
 const store={
-  mem:{},
+  mem:{}, pend:{},
   get(k,d){ if(k in store.mem) return store.mem[k]; try{const v=localStorage.getItem('perfrpt:'+k);return v?JSON.parse(v):d}catch(e){return d} },
-  set(k,v){ store.mem[k]=v; if(k!=='days'&&k!=='settingsAt'&&!/^(mkt|brk|mkfetch):/.test(k)){ const at=new Date().toISOString(); store.mem.settingsAt=at; try{localStorage.setItem('perfrpt:settingsAt',JSON.stringify(at));}catch(_){} if(typeof scheduleSettings==='function') scheduleSettings(); } try{localStorage.setItem('perfrpt:'+k,JSON.stringify(v));return true}catch(e){store.lastErr=e;return false} },
+  set(k,v){ store.mem[k]=v;
+    if(k!=='days'&&k!=='settingsAt'&&!/^(mkt|brk|mkfetch):/.test(k)){ const at=new Date().toISOString(); store.mem.settingsAt=at; try{localStorage.setItem('perfrpt:settingsAt',JSON.stringify(at));}catch(_){} if(typeof scheduleSettings==='function') scheduleSettings(); }
+    if(BIGKEY.test(k)){ if(typeof IDB!=='undefined'&&IDB.ok){ kvPut(k,v); return true; } store.pend[k]=v; return true; }
+    try{localStorage.setItem('perfrpt:'+k,JSON.stringify(v));return true}catch(e){store.lastErr=e;return false} },
   lastErr:null
 };
+function kvPut(k,v){ try{ const tx=IDB.db.transaction('meta','readwrite'); tx.objectStore('meta').put(v,'kv:'+k); tx.onerror=()=>{store.lastErr=tx.error;}; }catch(e){ store.lastErr=e; } }
+async function kvLoad(){
+  if(!IDB.ok) return;
+  // 1. 讀回 IndexedDB 裡的大資料
+  await new Promise(res=>{ try{ const st=IDB.db.transaction('meta','readonly').objectStore('meta'); const rq=st.openCursor();
+    rq.onsuccess=()=>{ const c=rq.result; if(!c){res();return;} if(String(c.key).startsWith('kv:')){ const k=String(c.key).slice(3); if(!(k in store.mem)) store.mem[k]=c.value; } c.continue(); }; rq.onerror=()=>res(); }catch(e){res();} });
+  // 2. 舊版放在 localStorage 的大資料搬過來，釋放空間
+  try{ const ks=[]; for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i); if(k.startsWith('perfrpt:')&&BIGKEY.test(k.slice(8))) ks.push(k);}
+    ks.forEach(k=>{ const kk=k.slice(8); if(!(kk in store.mem)){ try{store.mem[kk]=JSON.parse(localStorage.getItem(k));}catch(_){}} kvPut(kk,store.mem[kk]); localStorage.removeItem(k); }); }catch(_){}
+  // 3. 開啟前就存的
+  Object.entries(store.pend).forEach(([k,v])=>kvPut(k,v)); store.pend={};
+}
 // ===== 新版本第一次開啟：清除舊資料（每台電腦只會做一次）=====
 const RESET_VER='R2026-10-28'; window.__wipeIDB=false;
 (function(){ try{
@@ -643,7 +692,7 @@ function renderTodo(){
       const party=tr.querySelector('.mp').value.trim(); const src=tr.querySelector('.ms').value||null;
       manual[id]={party:party||null,src};
       const rem=tr.querySelector('.mr').checked;
-      if(rem&&party){savedMap[r.ac]={party,src};} else if(!rem&&savedParty(r.ac)===party){delete savedMap[r.ac];}
+      if(rem&&party){savedMap[r.ac]={party,src}; state.rows.forEach(r2=>{ if(r2.ac===r.ac&&r2.rem>0&&r2.id!==id){ const m2=manual[r2.id]; if(!m2||!m2.party) manual[r2.id]={party,src}; else if(!m2.src&&src) m2.src=src; } });} else if(!rem&&savedParty(r.ac)===party){delete savedMap[r.ac];}
       store.set('acmap',savedMap); recompute(); showTab('todo');
     };
     tr.querySelectorAll('.cand').forEach(b=>b.addEventListener('click',()=>{const c=cands[+b.dataset.i];tr.querySelector('.mp').value=c.party;if(c.src)tr.querySelector('.ms').value=c.src;apply();}));
@@ -672,7 +721,7 @@ function renderDetail(){
   <div class="scroll"><table><thead><tr><th>帳號</th><th>帳戶名稱</th><th>股票</th><th>B/S</th><th class="r">股數</th><th class="r">價格</th><th class="r">金額</th><th class="r">bps</th><th>歸戶</th><th>方式</th><th class="r">手收</th></tr></thead><tbody>
   ${list.map(r=>`<tr><td>${r.ac}</td><td>${esc(r.name.slice(0,30))}</td><td>${esc(r.code)}</td><td>${r.bs}</td><td class="r">${fmtN(r.sh)}</td><td class="r">${r.px}</td><td class="r">${fmtN(r.gross)}</td><td class="r ${r.isBad?'bad':''}">${r.bps}</td>
    <td>${r.parts.map(p=>`${p.src?chip(p.src):''}${p.client?esc(p.client):'<span class="pending">未指定</span>'}${r.parts.length>1?' '+fmtN(p.qty):''}`).join('<br>')}</td>
-   <td>${[...new Set(r.parts.map(p=>({direct:'帳號',exact:'股數配對',affinity:'同帳號',manual:'人工'}[p.how])))].join('、')}</td><td class="r">${fmtN(r.commFixed)}</td></tr>`).join('')}
+   <td>${[...new Set(r.parts.map(p=>({direct:'帳號','direct+':'帳號（股數多於下單檔）',name:'名稱',exact:'股數配對',affinity:'同帳號',manual:'人工'}[p.how])))].join('、')}</td><td class="r">${fmtN(r.commFixed)}</td></tr>`).join('')}
   </tbody></table></div>`;
   const dq=$('#dq'); dq.addEventListener('input',()=>{detailQ=dq.value;const pos=dq.selectionStart;renderDetail();const n=$('#dq');n.focus();n.setSelectionRange(pos,pos);});
 }
@@ -730,7 +779,7 @@ $('#export').addEventListener('click',()=>{
   XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(rk),'本日排名');
   XLSX.utils.book_append_sheet(wb,rebateSheet(),'Rebate');
   if((state.extra||[]).length) XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(state.extra.map(x=>({客戶:x.client,成交值:x.gross,手收:x.comm,'DMA/Care':x.dc,備註:x.note||''}))),'人工輸入成交');
-  const det=[];state.rows.forEach(r=>r.parts.forEach(p=>det.push({帳號:r.ac,FID:r.fid,帳戶名稱:r.name,股票:r.code,股名:r.stock,'B/S':r.bs,股數:p.qty,價格:r.px,金額:Math.round(p.gross),'原bps':r.bps,客戶:p.client||'',通路:p.src?SRC_LABEL[p.src]:'',歸戶方式:{direct:'帳號',exact:'股數配對',affinity:'同帳號',manual:'人工'}[p.how],原手收:Math.round(r.comm*p.qty/r.sh),修正後手收:Math.round(p.comm)})));
+  const det=[];state.rows.forEach(r=>r.parts.forEach(p=>det.push({帳號:r.ac,FID:r.fid,帳戶名稱:r.name,股票:r.code,股名:r.stock,'B/S':r.bs,股數:p.qty,價格:r.px,金額:Math.round(p.gross),'原bps':r.bps,客戶:p.client||'',通路:p.src?SRC_LABEL[p.src]:'',歸戶方式:{direct:'帳號','direct+':'帳號（股數多於下單檔）',name:'名稱',exact:'股數配對',affinity:'同帳號',manual:'人工'}[p.how],原手收:Math.round(r.comm*p.qty/r.sh),修正後手收:Math.round(p.comm)})));
   XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(det),'明細');
   const fx=state.rows.filter(r=>r.isBad).map(r=>({帳號:r.ac,帳戶名稱:r.name,股票:r.code,'B/S':r.bs,股數:r.sh,金額:r.gross,原手收:r.comm,修正後:r.commFixed,拆分:r.parts.map(p=>(p.src?SRC_LABEL[p.src]:'待指定')+' '+p.qty).join(' / ')}));
   XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(fx.length?fx:[{說明:'無'}]),'手收修正');
@@ -1141,8 +1190,7 @@ async function persistNow(){
     if(!IDB.ok||!lsOK||nm==='SecurityError') why='這個環境不允許網頁存資料。請按上方「連結共用資料夾」，資料會改存到公槽；或改用 Chrome / Edge 打開（不要用預覽畫面或無痕視窗）。';
     else if(/Quota/i.test(nm)) why='瀏覽器的儲存空間滿了。請到「資料庫」分頁按「完整備份」後，刪除較舊的日期。';
     else why=`儲存時發生錯誤（${esc(nm||'未知')}：${esc(e.message||'')}）。請把這段文字告訴 Claude。`;
-    $('#saveStat').innerHTML='<span class="pending">✗ 無法儲存</span>';
-    $('#saveWhy').innerHTML=`<b>這一天的資料沒有存起來。</b>${why}`; $('#saveWhy').hidden=false;
+    $('#saveStat').innerHTML=`<span class="pending" title="${esc(why.replace(/<[^>]+>/g,''))}">✗ 無法儲存</span>`;
   }
   fillDaySel();
 }
@@ -1192,6 +1240,7 @@ function renderDB(){
   }));
   $('#bkExport').addEventListener('click',async()=>{
     const kv={}; try{for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i); if(k.startsWith('perfrpt:'))kv[k.slice(8)]=JSON.parse(localStorage.getItem(k));}}catch(e){}
+    Object.keys(store.mem).forEach(k=>{ if(BIGKEY.test(k)) kv[k]=store.mem[k]; });
     const snaps=await IDB.all().catch(()=>[]);
     const z=await gzBlob(JSON.stringify({tool:'業績日報',version:1,exported:new Date().toISOString(),kv,snaps})); const blob=z.blob;
     const t=new Date(); await saveFile(`業績日報_完整備份_${t.getFullYear()}${String(t.getMonth()+1).padStart(2,'0')}${String(t.getDate()).padStart(2,'0')}.json${z.gz?'.gz':''}`,blob,$('#dbMsg'));
@@ -1339,6 +1388,7 @@ async function boot(){
   document.querySelectorAll('.slot').forEach(sl=>sl.dataset.ph=sl.querySelector('.fn').textContent);
   const ok=await IDB.open();
   if(window.__wipeIDB&&IDB.ok){ try{ await IDB.req(IDB.db.transaction('snap','readwrite').objectStore('snap').clear()); await IDB.req(IDB.db.transaction('meta','readwrite').objectStore('meta').clear()); }catch(_){} }
+  await kvLoad(); mktHist=store.get('mktHist',{});
   snapKeys=(await IDB.keys().catch(()=>[])).map(String);
   fillDaySel();
   await syncBoot();
