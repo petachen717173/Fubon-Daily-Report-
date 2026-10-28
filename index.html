@@ -185,6 +185,21 @@ table.brk tr.sep td{border-top:2px solid var(--ink)}
 .subtabs{display:flex;gap:2px;flex-wrap:wrap;background:var(--accent-soft);border:1px solid var(--accent);border-radius:0 8px 8px 8px;padding:4px 6px;margin:-15px 0 14px}
 .subtabs .tab{font-size:13px;padding:7px 12px}
 .subtabs[hidden],[hidden]{display:none!important}
+
+.syncbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:0 0 14px;font-size:13px}
+.xfer{margin-left:auto;display:flex;gap:8px}
+.syncbar button{padding:5px 12px;font-size:13px}
+.linkbtn{border:0;background:none;color:var(--mute);text-decoration:underline;padding:0 4px;font-size:12px;cursor:pointer}
+.exbox{max-width:none;margin-top:20px}
+.exbox input{max-width:none}
+.dcsel{font-size:12.5px;padding:3px 6px}
+
+/* 只保留框內的說明文字 */
+.note{display:none}
+.upbox .note,#reportInputs .note,.rule .note,details .note,.rcard .note{display:block}
+header .sub{display:none}
+.mkimp{display:flex;gap:10px;align-items:center;margin:8px 0 4px;flex-wrap:wrap}
+button.danger{color:var(--bad);border-color:var(--bad)}
 </style>
 </head>
 <body>
@@ -194,7 +209,7 @@ table.brk tr.sep td{border-top:2px solid var(--ink)}
   <div class="daybox"><label for="daySel">交易日</label><select id="daySel"></select><span id="saveStat"></span></div>
 </header>
 <div class="warn" id="saveWhy" hidden></div>
-<div class="warn" id="storeWarn" hidden><b>目前無法儲存資料。</b>關掉或重新整理後，今天做的都會消失。請改用網址開啟，或把 html 檔下載到電腦用 Chrome / Edge 打開（不要在預覽畫面或無痕視窗裡使用）。</div>
+
 
 <div class="slots">
   <label class="slot" id="s-conf"><b>Trade Confirm</b><span class="fn">Trade_Conf_MMDD.xls</span><input type="file" accept=".xls,.xlsx" data-k="conf"></label>
@@ -205,7 +220,7 @@ table.brk tr.sep td{border-top:2px solid var(--ink)}
 <div class="bar">
   <button class="primary" id="run" disabled>開始比對</button>
   <span class="msg" id="msg">先放入 Trade Confirm、DMA、FOMS 三個檔案。</span>
-  <label class="btn" style="margin-left:auto">還原備份<input type="file" id="bkImportTop" accept=".json" hidden></label>
+  <span class="xfer"><button id="shareExport">匯出</button><label class="btn">匯入<input type="file" id="shareImport" accept=".json,.gz" hidden></label><input type="file" id="bkImportTop" accept=".json,.gz" hidden></span>
 </div>
 
 <div id="out" hidden>
@@ -224,7 +239,7 @@ table.brk tr.sep td{border-top:2px solid var(--ink)}
     <button class="tab" role="tab" data-p="map">對照表</button>
     <button class="tab" role="tab" data-p="db">資料庫</button>
   </div>
-  <section class="panel on" id="p-report"><div class="rp-tools"><button id="png">下載報表圖片</button><span class="msg">圖片包含業務達成情況和券商排名，可以直接貼進 email。數字設定和券商資料上傳在報表下方。</span></div><div id="reportCard"></div><div class="upbox"><h3>券商排名資料</h3><div class="rp-tools"><label class="btn">上傳券商排名 txt<input type="file" id="brkFile" accept=".txt" hidden></label><span class="msg" id="brkMsg"></span></div><div id="brkMapBox"></div></div><div id="reportInputs"></div></section>
+  <section class="panel on" id="p-report"><div class="rp-tools"><button id="png">下載報表圖片</button></div><div id="reportCard"></div><div class="upbox"><h3>券商排名資料</h3><div class="rp-tools"><label class="btn">上傳券商排名 txt<input type="file" id="brkFile" accept=".txt" hidden></label><span class="msg" id="brkMsg"></span></div><div id="brkMapBox"></div></div><div id="reportInputs"></div></section>
   <section class="panel" id="p-rank"></section>
   <section class="panel" id="p-todo"></section>
   <section class="panel" id="p-fix"></section>
@@ -232,7 +247,7 @@ table.brk tr.sep td{border-top:2px solid var(--ink)}
   <section class="panel" id="p-rebate"></section>
   <section class="panel" id="p-month"></section>
   <section class="panel" id="p-map"></section>
-  <section class="panel" id="p-db"></section>
+  <section class="panel" id="p-db-wrap"><div class="syncbar"><button id="syncBtn">連結共用資料夾</button><span id="syncStat"></span></div><div id="p-db"></div></section>
   <div class="bar">
     <button id="export">匯出 Excel</button>
     <span class="msg" id="msg2"></span>
@@ -429,6 +444,17 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { parseCon
 </script>
 <script>
 const $=s=>document.querySelector(s);
+// ===== gzip 壓縮 / 解壓縮 =====
+const gzOK=typeof CompressionStream==='function'&&typeof DecompressionStream==='function';
+async function gzBlob(text){ if(!gzOK) return {blob:new Blob([text],{type:'application/json'}),gz:false};
+  const stream=new Blob([text]).stream().pipeThrough(new CompressionStream('gzip')); return {blob:new Blob([await new Response(stream).arrayBuffer()],{type:'application/gzip'}),gz:true}; }
+async function readMaybeGz(file){
+  const buf=new Uint8Array(await file.arrayBuffer());
+  if(buf[0]===0x1f&&buf[1]===0x8b){ if(!gzOK) throw new Error('這個瀏覽器不能解壓縮，請改用 Chrome 或 Edge');
+    const stream=new Blob([buf]).stream().pipeThrough(new DecompressionStream('gzip')); return await new Response(stream).text(); }
+  return new TextDecoder().decode(buf);
+}
+
 // ===== 下載：網址版用 downloads capability，本機檔案用一般下載 =====
 let dlCap; async function getDL(){ if(dlCap!==undefined) return dlCap; dlCap=(window.claude&&window.claude.use)?await window.claude.use('downloads').catch(()=>null):null; return dlCap; }
 async function saveFile(filename,blob,sayEl){
@@ -443,9 +469,17 @@ const files={}; const wbs={};
 const store={
   mem:{},
   get(k,d){ if(k in store.mem) return store.mem[k]; try{const v=localStorage.getItem('perfrpt:'+k);return v?JSON.parse(v):d}catch(e){return d} },
-  set(k,v){ store.mem[k]=v; try{localStorage.setItem('perfrpt:'+k,JSON.stringify(v));return true}catch(e){store.lastErr=e;return false} },
+  set(k,v){ store.mem[k]=v; if(k!=='days'&&k!=='settingsAt'&&!/^(mkt|brk|mkfetch):/.test(k)){ const at=new Date().toISOString(); store.mem.settingsAt=at; try{localStorage.setItem('perfrpt:settingsAt',JSON.stringify(at));}catch(_){} if(typeof scheduleSettings==='function') scheduleSettings(); } try{localStorage.setItem('perfrpt:'+k,JSON.stringify(v));return true}catch(e){store.lastErr=e;return false} },
   lastErr:null
 };
+// ===== 新版本第一次開啟：清除舊資料（每台電腦只會做一次）=====
+const RESET_VER='R2026-10-28'; window.__wipeIDB=false;
+(function(){ try{
+  if(localStorage.getItem('perfrpt-reset')===RESET_VER) return;
+  const keys=[]; for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i); if(k.startsWith('perfrpt:')) keys.push(k);}
+  keys.forEach(k=>localStorage.removeItem(k)); window.__wipeIDB=true;
+  localStorage.setItem('perfrpt-reset',RESET_VER);
+}catch(e){} })();
 let savedMap=store.get('acmap',{});   // ac -> party (舊格式) 或 {party,src}
 const savedOf=ac=>{const v=savedMap[ac]; if(!v)return null; return typeof v==='string'?{party:v,src:null}:v;};
 const savedParty=ac=>{const v=savedOf(ac); return v?v.party:undefined;};
@@ -458,6 +492,8 @@ const fmtE=v=>(v/1e8).toLocaleString('en-US',{minimumFractionDigits:2,maximumFra
 const fmtN=v=>Math.round(v).toLocaleString('en-US');
 const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const chip=s=>`<span class="ch ${s}">${SRC_LABEL[s]||s}</span>`;
+let dcOverride=store.get('dcOverride',{});
+const dcOf=c=>dcOverride[c.client]||chD(c.src||{});
 const chD=src=>{const k=Object.keys(src).filter(s=>src[s]>0);const a=[];if(k.includes('HT'))a.push('C');if(k.includes('LT'))a.push('D');if(k.includes('XP'))a.push('K');if(k.includes('NU'))a.push('N');return a.join(',')};
 
 document.querySelectorAll('.slot input').forEach(inp=>{
@@ -501,8 +537,15 @@ $('#run').addEventListener('click',async()=>{
   }catch(e){ $('#msg').className='msg err'; $('#msg').textContent=e.message; console.error(e); }
 });
 
+const EXTRA_SRC={D:'LT',C:'HT'};
+function mergeExtra(clients){
+  const map={}; clients.forEach(c=>map[c.client]=c);
+  (state.extra||[]).forEach(x=>{ if(!x.client||!(x.gross>0)) return; const n=alias[x.client]||x.client;
+    const c=map[n]=map[n]||{client:n,gross:0,comm:0,src:{}}; c.gross+=x.gross; c.comm+=(x.comm||0); const s=EXTRA_SRC[x.dc]||'HT'; c.src[s]=(c.src[s]||0)+x.gross; c.hasExtra=true; });
+  return Object.values(map).sort((a,b)=>b.gross-a.gross);
+}
 function recompute(){
-  state.clients=finalize(state.rows,manual,alias);
+  state.clients=mergeExtra(finalize(state.rows,manual,alias));
   fillDaySel();
   renderLedger(); renderReport(); renderRebate(); renderRank(); renderTodo(); renderFix(); renderDetail(); renderMonth(); renderMap(); renderDB();
   persist();
@@ -513,7 +556,8 @@ function totals(){
   const gross=r.reduce((a,x)=>a+x.gross,0), c0=r.reduce((a,x)=>a+x.comm,0), c1=r.reduce((a,x)=>a+x.commFixed,0);
   let lt=0; r.forEach(x=>x.parts.forEach(p=>{if(p.src==='LT')lt+=p.gross}));
   const todo=r.filter(x=>x.unresolved).length;
-  return {gross,c0,c1,lt,todo};
+  let eg=0,ec=0,el=0; (state.extra||[]).forEach(x=>{ if(!(x.gross>0))return; eg+=x.gross; ec+=(x.comm||0); if(x.dc==='D')el+=x.gross; });
+  return {gross:gross+eg,c0:c0+ec,c1:c1+ec,lt:lt+el,todo,extraGross:eg};
 }
 function renderLedger(){
   const t=totals();
@@ -526,16 +570,40 @@ function renderLedger(){
   tab.innerHTML='待人工確認'+(t.todo?`<span class="n">${t.todo}</span>`:'');
 }
 
-function rankTable(list,showComm=true){
+function dcSel(c){ const auto=chD(c.src||{}); const v=dcOverride[c.client]||''; return `<select class="dcsel" data-c="${esc(c.client)}"><option value="" ${v?'':'selected'}>自動（${auto||'—'}）</option>${['D','C','C,D'].map(o=>`<option value="${o}" ${v===o?'selected':''}>${o}</option>`).join('')}</select>`; }
+function rankTable(list,showComm=true,editDC=false){
   if(!list.length) return '<div class="empty">沒有資料。</div>';
   const tot=list.reduce((a,c)=>a+c.gross,0), totc=list.reduce((a,c)=>a+c.comm,0);
   return `<div class="scroll"><table><thead><tr><th class="r">#</th><th>客戶</th><th class="r">成交值（億）</th>${showComm?'<th class="r">手收（修正後）</th>':''}<th>DMA / Care</th><th>通路</th></tr></thead><tbody>
-  ${list.map((c,i)=>`<tr><td class="r">${i+1}</td><td>${c.client==='（未指定）'?'<span class="pending">（未指定）</span>':esc(c.client)}</td><td class="r">${fmtE(c.gross)}</td>${showComm?`<td class="r">${fmtN(c.comm)}</td>`:''}<td>${chD(c.src)}</td><td>${Object.keys(c.src).filter(s=>c.src[s]>0).map(chip).join('')}</td></tr>`).join('')}
+  ${list.map((c,i)=>`<tr><td class="r">${i+1}</td><td>${c.client==='（未指定）'?'<span class="pending">（未指定）</span>':esc(c.client)}</td><td class="r">${fmtE(c.gross)}</td>${showComm?`<td class="r">${fmtN(c.comm)}</td>`:''}<td>${editDC?dcSel(c):dcOf(c)}</td><td>${Object.keys(c.src).filter(s=>c.src[s]>0).map(chip).join('')}</td></tr>`).join('')}
   <tr class="total"><td></td><td>合計</td><td class="r">${fmtE(tot)}</td>${showComm?`<td class="r">${fmtN(totc)}</td>`:''}<td></td><td></td></tr></tbody></table></div>`;
 }
 function renderRank(){
-  $('#p-rank').innerHTML=`<p class="note">依 Trade Confirm 的成交值排名，客戶名稱來自下單檔。DMA / Care 欄：D = DMA、C = FOMS、K = K Way、N = NuOMS。客戶名稱可以在「對照表」改成報表上用的名稱。</p>${rankTable(state.clients)}`;
+  const ex=state.extra||[]; const parties=allParties().map(p=>alias[p]||p);
+  $('#p-rank').innerHTML=`<p class="note">依成交值排名，客戶名稱來自下單檔。DMA / Care 欄預設依實際通路自動判斷（D = DMA、C = FOMS）；如果某客戶主要是 DMA、只是零股偶爾走 FOMS，可以直接選「D」，之後每天都會套用，報表上的排名也會一起改。</p>${rankTable(state.clients,true,true)}
+  <div class="upbox exbox"><h3>人工輸入的成交</h3><p class="note">不在 Trade Confirm、DMA、FOMS 裡的成交，在這裡補上（只記在這一天）。會算進本日成交值、手收、客戶排名和報表。成交值和手收的單位都是「元」。</p>
+   <datalist id="exParties">${[...new Set(parties)].sort().map(p=>`<option value="${esc(p)}">`).join('')}</datalist>
+   <div class="scroll"><table><thead><tr><th>客戶</th><th class="r">成交值（元）</th><th class="r">＝億</th><th class="r">手收（元）</th><th>DMA / Care</th><th>備註</th><th></th></tr></thead><tbody>
+   ${ex.length?ex.map((x,i)=>`<tr data-i="${i}"><td><input type="text" class="ex-c" list="exParties" value="${esc(x.client||'')}" placeholder="客戶名稱"></td>
+     <td><input type="text" class="ex-g num" value="${x.gross?fmtN(x.gross):''}" placeholder="0" style="width:150px;text-align:right"></td><td class="r msg">${x.gross?fmtE(x.gross):'—'}</td>
+     <td><input type="text" class="ex-m num" value="${x.comm?fmtN(x.comm):''}" placeholder="0" style="width:120px;text-align:right"></td>
+     <td><select class="ex-d"><option value="D" ${x.dc==='D'?'selected':''}>D（DMA）</option><option value="C" ${x.dc!=='D'?'selected':''}>C（Care）</option></select></td>
+     <td><input type="text" class="ex-n" value="${esc(x.note||'')}" placeholder="例：鉅額、其他系統"></td><td><button class="ex-x">刪除</button></td></tr>`).join(''):'<tr><td colspan="7" class="msg">今天沒有人工輸入的成交。</td></tr>'}
+   </tbody></table></div>
+   <div class="toolbar" style="margin-top:8px"><button id="exAdd">新增一筆</button>${ex.length?`<span class="msg">合計 ${fmtE(ex.reduce((a,x)=>a+(x.gross||0),0))} 億、手收 ${fmtN(ex.reduce((a,x)=>a+(x.comm||0),0))}</span>`:''}</div></div>`;
+  $('#p-rank').querySelectorAll('.dcsel').forEach(sel=>sel.addEventListener('change',()=>{ const c=sel.dataset.c; if(sel.value) dcOverride[c]=sel.value; else delete dcOverride[c]; store.set('dcOverride',dcOverride); recompute(); showTab('rank'); }));
+  const upd=()=>{ recompute(); showTab('rank'); };
+  $('#exAdd').addEventListener('click',()=>{ state.extra=state.extra||[]; state.extra.push({client:'',gross:0,comm:0,dc:'C',note:''}); upd(); const ins=$('#p-rank').querySelectorAll('.ex-c'); if(ins.length) ins[ins.length-1].focus(); });
+  $('#p-rank').querySelectorAll('.exbox tbody tr[data-i]').forEach(tr=>{ const x=state.extra[+tr.dataset.i];
+    tr.querySelector('.ex-c').addEventListener('change',e=>{x.client=e.target.value.trim();upd();});
+    tr.querySelector('.ex-g').addEventListener('change',e=>{x.gross=pn(e.target.value)||0;upd();});
+    tr.querySelector('.ex-m').addEventListener('change',e=>{x.comm=pn(e.target.value)||0;upd();});
+    tr.querySelector('.ex-d').addEventListener('change',e=>{x.dc=e.target.value;upd();});
+    tr.querySelector('.ex-n').addEventListener('change',e=>{x.note=e.target.value;persist();});
+    tr.querySelector('.ex-x').addEventListener('click',()=>{state.extra.splice(+tr.dataset.i,1);upd();});
+  });
 }
+
 
 function candidatesFor(r){
   // 1) parties linked to this account (today / saved)  2) leftover orders in same stock & side, closest qty first
@@ -647,7 +715,7 @@ function showTab(p){
   document.querySelectorAll('#subtabs .tab').forEach(t=>t.setAttribute('aria-selected',t.dataset.p===p));
   $('#subtabs').hidden=!sub; document.querySelector('.tab.peta').setAttribute('aria-expanded',sub);
   document.querySelector('.tab.peta').textContent=sub?'peta ▴':'peta ▾';
-  document.querySelectorAll('.panel').forEach(x=>x.classList.toggle('on',x.id==='p-'+p));
+  document.querySelectorAll('.panel').forEach(x=>x.classList.toggle('on',x.id==='p-'+p||x.id==='p-'+p+'-wrap'));
 }
 $('#tabs').addEventListener('click',e=>{const t=e.target.closest('.tab');if(!t)return; if(t.dataset.p==='peta'&&!$('#subtabs').hidden){showTab('report');return;} showTab(t.dataset.p);});
 $('#subtabs').addEventListener('click',e=>{const t=e.target.closest('.tab');if(t)showTab(t.dataset.p)});
@@ -656,11 +724,12 @@ $('#png').addEventListener('click',()=>reportPng().catch(e=>{$('#msg2').textCont
 
 $('#export').addEventListener('click',()=>{
   const wb=XLSX.utils.book_new();
-  const rk=state.clients.map((c,i)=>({排名:i+1,客戶:c.client,'成交值(億)':+(c.gross/1e8).toFixed(4),'手收(修正後)':Math.round(c.comm),'DMA/Care':chD(c.src)}));
+  const rk=state.clients.map((c,i)=>({排名:i+1,客戶:c.client,'成交值(億)':+(c.gross/1e8).toFixed(4),'手收(修正後)':Math.round(c.comm),'DMA/Care':dcOf(c)}));
   XLSX.utils.book_append_sheet(wb,reportSheet(),'報表');
   {const bs=brokerSheet(); if(bs) XLSX.utils.book_append_sheet(wb,bs,'券商排名');}
   XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(rk),'本日排名');
   XLSX.utils.book_append_sheet(wb,rebateSheet(),'Rebate');
+  if((state.extra||[]).length) XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(state.extra.map(x=>({客戶:x.client,成交值:x.gross,手收:x.comm,'DMA/Care':x.dc,備註:x.note||''}))),'人工輸入成交');
   const det=[];state.rows.forEach(r=>r.parts.forEach(p=>det.push({帳號:r.ac,FID:r.fid,帳戶名稱:r.name,股票:r.code,股名:r.stock,'B/S':r.bs,股數:p.qty,價格:r.px,金額:Math.round(p.gross),'原bps':r.bps,客戶:p.client||'',通路:p.src?SRC_LABEL[p.src]:'',歸戶方式:{direct:'帳號',exact:'股數配對',affinity:'同帳號',manual:'人工'}[p.how],原手收:Math.round(r.comm*p.qty/r.sh),修正後手收:Math.round(p.comm)})));
   XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(det),'明細');
   const fx=state.rows.filter(r=>r.isBad).map(r=>({帳號:r.ac,帳戶名稱:r.name,股票:r.code,'B/S':r.bs,股數:r.sh,金額:r.gross,原手收:r.comm,修正後:r.commFixed,拆分:r.parts.map(p=>(p.src?SRC_LABEL[p.src]:'待指定')+' '+p.qty).join(' / ')}));
@@ -678,9 +747,59 @@ const mktKey=()=>'mkt:'+state.date;
 function todayInput(){return store.get(mktKey(),{fb:null,fs:null,mkt:null,exch:null,rebate:null,adjTurn:0,adjComm:0})}
 function todayVals(){
   const t=totals(); const m=todayInput();
-  let dma=0; state.rows.forEach(r=>r.parts.forEach(p=>{if(p.src==='LT')dma+=p.gross}));
+  const dma=t.lt;
   return {turn:t.gross+(m.adjTurn||0)*1e8, comm:t.c1+(m.adjComm||0), exch:m.exch, rebate:rebateToday(), mkt:m.mkt, fb:m.fb, fs:m.fs, dma};
 }
+// ===== 匯入「市場狀況」Excel（巨集抓的每日市場資料）=====
+let mktHist=store.get('mktHist',{}); // 'YYYY/MM/DD' -> {mkt,fb,fs}
+function xlDateKey(v){
+  if(v==null||v==='') return null;
+  if(typeof v==='number'){ const p=XLSX.SSF.parse_date_code(v); if(!p) return null; return `${p.y}/${String(p.m).padStart(2,'0')}/${String(p.d).padStart(2,'0')}`; }
+  if(v instanceof Date) return `${v.getFullYear()}/${String(v.getMonth()+1).padStart(2,'0')}/${String(v.getDate()).padStart(2,'0')}`;
+  const m=String(v).match(/(\d{4})\D(\d{1,2})\D(\d{1,2})/); if(m) return `${m[1]}/${m[2].padStart(2,'0')}/${m[3].padStart(2,'0')}`;
+  const m2=String(v).match(/^(\d{4})(\d{2})(\d{2})$/); return m2?`${m2[1]}/${m2[2]}/${m2[3]}`:null;
+}
+function parseMarketBook(wb){
+  for(const sn of wb.SheetNames){
+    const rows=XLSX.utils.sheet_to_json(wb.Sheets[sn],{header:1,raw:true,defval:null});
+    const hi=rows.findIndex(r=>r&&r.some(c=>String(c||'').trim()==='集買')&&r.some(c=>String(c||'').includes('集中總金額')));
+    if(hi<0) continue;
+    const h=rows[hi].map(c=>String(c||'').trim()); const ix=n=>h.findIndex(c=>c===n||c.includes(n));
+    const c={d:ix('Date')>=0?ix('Date'):0,tb:ix('集買'),ts:ix('集賣'),ob:ix('櫃買'),os:ix('櫃賣'),ta:ix('集中總金額'),oa:ix('櫃台總金額')};
+    if(Object.values(c).some(v=>v<0)) continue;
+    const out={};
+    rows.slice(hi+1).forEach(r=>{ if(!r) return; const d=xlDateKey(r[c.d]); if(!d) return;
+      const n=k=>{const v=Number(String(r[c[k]]??'').replace(/,/g,'')); return isFinite(v)?v:null;};
+      const tb=n('tb'),ts=n('ts'),ob=n('ob'),os=n('os'),ta=n('ta'),oa=n('oa');
+      if([tb,ts,ob,os,ta,oa].some(v=>v===null)) return;
+      out[d]={mkt:ta+oa,fb:tb+ob,fs:ts+os};
+    });
+    return out;
+  }
+  throw new Error('找不到市場資料：需要有「集買、集賣、櫃買、櫃賣、集中總金額、櫃台總金額」這幾欄的工作表。');
+}
+// MTD / YTD 的市場資料：如果匯入的歷史從月初／年初連續到今天，就直接加總
+function histSum(scope,d){
+  const ym=d.slice(0,7), y=d.slice(0,4);
+  const ks=Object.keys(mktHist).filter(x=>x<=d&&(scope==='mtd'?x.slice(0,7)===ym:x.slice(0,4)===y)).sort();
+  if(!ks.length||!mktHist[d]) return null;
+  const [ey,em,ed]=ks[0].split('/').map(Number);
+  if(scope==='mtd'?ed>5:(em!==1||ed>7)) return null;
+  const s={mkt:0,fb:0,fs:0}; ks.forEach(k=>{s.mkt+=mktHist[k].mkt;s.fb+=mktHist[k].fb;s.fs+=mktHist[k].fs;}); return s;
+}
+async function importMarketBook(file,say){
+  try{
+    const wb=XLSX.read(await file.arrayBuffer(),{type:'array'});
+    const h=parseMarketBook(wb); const ds=Object.keys(h).sort();
+    if(!ds.length) throw new Error('檔案裡沒有讀到任何一天的市場資料。');
+    mktHist={...mktHist,...h}; store.set('mktHist',mktHist);
+    ds.forEach(d=>{ const k='mkt:'+d; const m=store.get(k,{fb:null,fs:null,mkt:null,exch:null,rebate:null,adjTurn:0,adjComm:0}); m.fb=h[d].fb; m.fs=h[d].fs; m.mkt=h[d].mkt; store.set(k,m); });
+    const has=state&&h[state.date];
+    say(`<span class="okc">✓ 已匯入 ${ds.length} 天的市場資料（${ds[0]}～${ds[ds.length-1]}）</span>${state?(has?'':`<span class="pending">，但沒有 ${state.date} 這一天，請先在 Excel 執行巨集更新</span>`):''}`);
+    persist();
+  }catch(e){ say(`<span class="pending">${esc(e.message)}</span>`); }
+}
+
 function cumulate(scope){ // scope 'mtd' | 'ytd'
   const d=state.date, ym=d.slice(0,7), y=d.slice(0,4);
   const inScope=x=>scope==='mtd'?x.slice(0,7)===ym:x.slice(0,4)===y;
@@ -701,7 +820,8 @@ function cumulate(scope){ // scope 'mtd' | 'ytd'
     valid=scope==='mtd'?ed<=5:(em===1&&ed<=7);
   }
   if(!valid) FIELDS.forEach(([k])=>missing.add(k));
-  return {sum,days,missing,valid};
+  const hs=histSum(scope,d); if(hs){ ['mkt','fb','fs'].forEach(k=>{sum[k]=hs[k]; missing.delete(k);}); }
+  return {sum,days,missing,valid,hist:!!hs};
 }
 function kpis(v,days,missing){
   const has=(...ks)=>ks.every(k=>!missing.has(k)&&v[k]!==null&&v[k]!==undefined);
@@ -735,7 +855,7 @@ function monthClients(){
 function top10(list,label){
   const t=list.slice(0,10); const tot=t.reduce((a,c)=>a+c.gross,0);
   return `<table class="rk"><thead><tr><th>${label}</th><th>Client</th><th class="r">Trading (E)</th><th>DMA / Care</th></tr></thead><tbody>
-  ${t.map((c,i)=>`<tr><td class="r">${i+1}</td><td>${esc(c.client)}</td><td class="r">${f2(c.gross/1e8)}</td><td>${chD(c.src)}</td></tr>`).join('')}
+  ${t.map((c,i)=>`<tr><td class="r">${i+1}</td><td>${esc(c.client)}</td><td class="r">${f2(c.gross/1e8)}</td><td>${dcOf(c)}</td></tr>`).join('')}
   <tr class="total"><td></td><td>Total</td><td class="r">${f2(tot/1e8)}</td><td></td></tr></tbody></table>`;
 }
 function renderReport(){
@@ -776,7 +896,7 @@ function renderInputs(R){
   const missM=[...cumulate('mtd').missing], missY=[...cumulate('ytd').missing];
   const nm=Object.fromEntries(FIELDS);
   $('#reportInputs').innerHTML=`
-  <details open><summary>本日市場資料與費用（${state.date}，依日期記住）</summary><div class="grid">
+  <details open><summary>本日市場資料與費用（${state.date}，依日期記住）</summary><div class="mkimp"><label class="btn">匯入市場狀況 Excel<input type="file" id="mkBook" accept=".xlsm,.xlsx,.xls" hidden></label><span class="msg" id="mkBookMsg">${Object.keys(mktHist).length?`已有 ${Object.keys(mktHist).length} 天市場資料（到 ${Object.keys(mktHist).sort().pop()}）`:''}</span></div><div class="grid">
     <label>FINI 買進（元）${inp('m.fb',m.fb)}</label><label>FINI 賣出（元）${inp('m.fs',m.fs)}</label><label>市場成交值（元）${inp('m.mkt',m.mkt)}</label>
     <label>Exchange fee${inp('m.exch',m.exch)}</label><label>Rebate 手動覆寫（留空＝依規則）${inp('m.rebate',m.rebate,f0(calcRebate().total))}</label><span></span>
     <label>其他成交值調整（億）${inp('m.adjTurn',m.adjTurn,'0')}</label><label>其他手收調整${inp('m.adjComm',m.adjComm,'0')}</label>
@@ -785,16 +905,16 @@ function renderInputs(R){
     <label>市佔率目標（bps）${inp('t.share',targets.share)}</label><label>FINI 市佔率目標（bps）${inp('t.fini',targets.fini)}</label><span></span>
     <label>每日交易值目標（億）${inp('t.turnD',targets.turnD)}</label><label>每日手收目標${inp('t.commD',targets.commD)}</label><label>每億手收目標（自動）<input type="text" disabled value="${targets.turnD?f0(targets.commD/targets.turnD):''}"></label>
   </div></details>
-  <details ${missM.length||missY.length?'open':''}><summary>期初累計（只需設定一次）${missM.length||missY.length?'<span class="pending"> ・ MTD / YTD 有欄位缺資料</span>':''}</summary>
-  <p class="note">填入某一天收盤後的 MTD / YTD 累計（例如前一個交易日報表上的數字），之後每天上傳比對後會自動存入並往上累加。月份換了，MTD 會自動從零開始。</p>
+  <details ${missM.length||missY.length?'open':''}><summary>期初累計${missM.length||missY.length?'<span class="pending"> ・ MTD / YTD 有欄位缺資料</span>':''}</summary>
   <div class="grid"><label>累計截止日（YYYY/MM/DD）<input type="text" class="num" data-f="b.date" value="${esc(base.date)}" placeholder="2026/10/20"></label>
     <label>MTD 已累計交易日數${inp('b.mtdDays',base.mtdDays)}</label><label>YTD 已累計交易日數${inp('b.ytdDays',base.ytdDays)}</label></div>
   <div class="scroll" style="margin-top:8px"><table class="btab"><thead><tr><th>項目</th><th>MTD 累計</th><th>YTD 累計</th></tr></thead><tbody>
    ${FIELDS.map(([k,n])=>`<tr><td>${n}${missM.includes(k)||missY.includes(k)?' <span class="pending">缺</span>':''}</td><td>${inp('b.mtd.'+k,base.mtd[k])}</td><td>${inp('b.ytd.'+k,base.ytd[k])}</td></tr>`).join('')}
   </tbody></table></div></details>`;
+  {const mb=$('#mkBook'); if(mb) mb.addEventListener('change',e=>{const f=e.target.files[0]; e.target.value=''; if(!f)return; importMarketBook(f,m=>{ const open=[...$('#reportInputs').querySelectorAll('details')].map(x=>x.open); renderReport(); [...$('#reportInputs').querySelectorAll('details')].forEach((x,j)=>x.open=open[j]); $('#mkBookMsg').innerHTML=m; });});}
   $('#reportInputs').querySelectorAll('input[data-f]').forEach(i=>i.addEventListener('change',()=>{
     const f=i.dataset.f.split('.'); const raw=i.value.trim();
-    if(f[0]==='m'){const m=todayInput(); m[f[1]]=pn(raw); if(f[1].startsWith('adj')&&m[f[1]]===null)m[f[1]]=0; store.set(mktKey(),m);}
+    if(f[0]==='m'){const m=todayInput(); m[f[1]]=pn(raw); if(f[1].startsWith('adj')&&m[f[1]]===null)m[f[1]]=0; store.set(mktKey(),m); persist();}
     else if(f[0]==='t'){const v=pn(raw); if(v!==null){targets[f[1]]=v; store.set('targets',targets);}}
     else if(f[0]==='b'){ if(f[1]==='date') base.date=raw; else if(f.length===2) base[f[1]]=pn(raw)||0; else {base[f[1]]=base[f[1]]||{}; base[f[1]][f[2]]=pn(raw);} store.set('base',base);}
     const open=[...$('#reportInputs').querySelectorAll('details')].map(x=>x.open);
@@ -838,7 +958,7 @@ const DEFAULT_RULES=[
  {id:uid(),on:true,name:'Point72（內法單）',note:'交易指示若顯示是內法的單，20bps手續費我們留3bps其餘退給內法',acs:'',clients:'Point72',tags:'Ally',ch:'any',type:'rule',exch:false,csa:0,research:0,tiers:[T('any',0,'any','keep',3)]},
 ];
 let rules=store.get('rebateRules',null)||JSON.parse(JSON.stringify(DEFAULT_RULES));
-(function migrate(){const d={'JIL':'9918000','Mizuho':'9970996','Core Pacific':'9933360'};let ch=false;
+(function migrate(){if(!store.get('rebateRules',null))return;const d={'JIL':'9918000','Mizuho':'9970996','Core Pacific':'9933360'};let ch=false;
  rules.forEach(R=>{if(R.excl===undefined){R.excl=d[R.name]||'';ch=true;}}); if(ch)store.set('rebateRules',rules);})();
 let exchRate=store.get('exchRate',0.4345);
 const saveRules=()=>store.set('rebateRules',rules);
@@ -970,16 +1090,19 @@ function rebateSheet(){
 
 // ===== 資料庫：每日快照存在 IndexedDB，可選日期 =====
 const IDB={db:null,ok:false,
-  open(){return new Promise(res=>{try{const rq=indexedDB.open('perfrpt',1);
-    rq.onupgradeneeded=()=>{rq.result.createObjectStore('snap',{keyPath:'date'});};
-    rq.onsuccess=()=>{IDB.db=rq.result;IDB.ok=true;res(true);}; rq.onerror=()=>res(false); rq.onblocked=()=>res(false);}catch(e){res(false);}});},
+  open(){return new Promise(res=>{try{const rq=indexedDB.open('perfrpt',2);
+    rq.onupgradeneeded=()=>{const d=rq.result; if(!d.objectStoreNames.contains('snap'))d.createObjectStore('snap',{keyPath:'date'}); if(!d.objectStoreNames.contains('meta'))d.createObjectStore('meta');};
+    rq.onsuccess=()=>{IDB.db=rq.result;IDB.ok=true; IDB.db.onversionchange=()=>{try{IDB.db.close();}catch(_){}}; res(true);}; rq.onerror=()=>res(false);
+    rq.onblocked=()=>{ /* 其他分頁還開著舊版：等它們關閉，不當作失敗 */ setTimeout(()=>{ if(!IDB.ok){ const m=document.getElementById('msg'); if(m){m.className='msg err'; m.textContent='請關閉其他已開啟的 Fubon Daily Report 分頁，再重新整理這一頁。';} } },3000); };
+  }catch(e){res(false);}});},
   tx(mode){return IDB.db.transaction('snap',mode).objectStore('snap');},
   req(r){return new Promise((res,rej)=>{r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error);});},
-  put(v){return IDB.ok?IDB.req(IDB.tx('readwrite').put(v)):Promise.reject(new Error('no db'));},
-  get(k){return IDB.ok?IDB.req(IDB.tx('readonly').get(k)):Promise.resolve(null);},
-  del(k){return IDB.ok?IDB.req(IDB.tx('readwrite').delete(k)):Promise.resolve();},
-  all(){return IDB.ok?IDB.req(IDB.tx('readonly').getAll()):Promise.resolve([]);},
-  keys(){return IDB.ok?IDB.req(IDB.tx('readonly').getAllKeys()):Promise.resolve([]);}
+  mem:new Map(),
+  put(v){ IDB.mem.set(v.date,v); return IDB.ok?IDB.req(IDB.tx('readwrite').put(v)):Promise.resolve(); },
+  get(k){ return IDB.ok?IDB.req(IDB.tx('readonly').get(k)):Promise.resolve(IDB.mem.get(k)||null); },
+  del(k){ IDB.mem.delete(k); return IDB.ok?IDB.req(IDB.tx('readwrite').delete(k)):Promise.resolve(); },
+  all(){ return IDB.ok?IDB.req(IDB.tx('readonly').getAll()):Promise.resolve([...IDB.mem.values()]); },
+  keys(){ return IDB.ok?IDB.req(IDB.tx('readonly').getAllKeys()):Promise.resolve([...IDB.mem.keys()]); }
 };
 let lsOK=true; try{localStorage.setItem('perfrpt:_t','1');localStorage.removeItem('perfrpt:_t');}catch(e){lsOK=false;}
 let snapKeys=[]; let loading=false; let saveTimer=null;
@@ -989,11 +1112,11 @@ function makeSnap(){
     rows:state.rows.map(r=>({id:r.id,sheet:r.sheet,ac:r.ac,fid:r.fid,name:r.name,code:r.code,sym:r.sym,stock:r.stock,bs:r.bs,sh:r.sh,px:r.px,gross:r.gross,comm:r.comm,totc:r.totc,bps:r.bps,rem:r.rem,allocs:r.allocs})),
     assoc:Object.fromEntries(Object.entries(state.assoc||{}).map(([k,v])=>[k,[...v]])),
     leftovers:(state.leftovers||[]).map(e=>({key:e.key,party:e.party,sym:e.sym,bs:e.bs,src:e.src,rem:e.rem})),
-    manual};
+    manual,extra:state.extra||[]};
 }
 function applySnap(s){
   state={date:s.date,rows:s.rows.map(r=>({...r,allocs:r.allocs||[]})),assoc:Object.fromEntries(Object.entries(s.assoc||{}).map(([k,v])=>[k,new Set(v)])),
-    leftovers:s.leftovers||[],parties:s.parties||[],files:s.files||{},orders:[]};
+    leftovers:s.leftovers||[],parties:s.parties||[],files:s.files||{},orders:[],extra:s.extra||[]};
   manual=s.manual||{};
 }
 function daySummary(){
@@ -1003,15 +1126,20 @@ function daySummary(){
 async function persistNow(){
   if(!state||!state.date) return;
   const days=db(); days[state.date]=daySummary(); const ok1=store.set('days',days);
-  let ok2=true, err2=null; try{await IDB.put(makeSnap());}catch(e){ok2=false;err2=e;}
+  let ok2=true, err2=null; const snap=makeSnap(); try{await IDB.put(snap);}catch(e){ok2=false;err2=e;}
   if(!snapKeys.includes(state.date)&&ok2) snapKeys.push(state.date);
-  const t=new Date();
-  if(ok1&&ok2){ $('#saveStat').innerHTML=`<span class="okc">✓ 已自動儲存</span> <span class="msg">${t.getHours()}:${String(t.getMinutes()).padStart(2,'0')}</span>`; $('#saveWhy').hidden=true; }
-  else{
+  const t=new Date(); const hm=`${t.getHours()}:${String(t.getMinutes()).padStart(2,'0')}`;
+  let r={ok:false}; if(SYNC&&SYNC.ok) r=await pushDay(state.date,snap);
+  const localOK=ok1&&ok2&&IDB.ok;
+  if(localOK||r.ok){
+    $('#saveStat').innerHTML=localOK?`<span class="okc">✓ 已自動儲存</span> <span class="msg">${hm}</span>`:`<span class="okc">✓ 已存到共用資料夾</span> <span class="msg">${hm}</span>`;
+    $('#saveWhy').hidden=true;
+    if(r.ok){ renderSyncBtn(); $('#syncStat').insertAdjacentHTML('beforeend',r.conflict?' <span class="pending">⚠ 這一天在你開啟後被別人更新過，已用你的版本覆蓋（對方版本另存一份在共用資料夾）</span>':` <span class="msg">已同步 ${hm}</span>`); }
+  } else {
     const e=(!ok1?store.lastErr:err2)||{}; const nm=e.name||'';
     let why;
-    if(!IDB.ok||!lsOK||nm==='SecurityError') why='這個環境不允許網頁存資料。最常見的原因是在 Claude 的預覽畫面或無痕視窗裡使用。請把 html 檔下載到電腦，用 Chrome 或 Edge 打開下載的檔案。';
-    else if(/Quota/i.test(nm)) why='瀏覽器的儲存空間滿了。請到「資料庫」分頁按「完整備份」後，刪除較舊的日期，或在瀏覽器設定中允許此網站使用更多空間。';
+    if(!IDB.ok||!lsOK||nm==='SecurityError') why='這個環境不允許網頁存資料。請按上方「連結共用資料夾」，資料會改存到公槽；或改用 Chrome / Edge 打開（不要用預覽畫面或無痕視窗）。';
+    else if(/Quota/i.test(nm)) why='瀏覽器的儲存空間滿了。請到「資料庫」分頁按「完整備份」後，刪除較舊的日期。';
     else why=`儲存時發生錯誤（${esc(nm||'未知')}：${esc(e.message||'')}）。請把這段文字告訴 Claude。`;
     $('#saveStat').innerHTML='<span class="pending">✗ 無法儲存</span>';
     $('#saveWhy').innerHTML=`<b>這一天的資料沒有存起來。</b>${why}`; $('#saveWhy').hidden=false;
@@ -1028,7 +1156,7 @@ function fillDaySel(){
 async function loadDay(d){
   let s=null; try{s=await IDB.get(d);}catch(e){}
   if(!s){ $('#msg').className='msg err'; $('#msg').textContent=`${d} 只有存當時的摘要（舊版工具存的），沒有明細可以開啟。重新上傳那天的檔案即可補齊。`; fillDaySel(); return; }
-  loading=true; applySnap(s); recompute(); loading=false;
+  loading=true; applySnap(s); recompute(); loading=false; if(SYNC)SYNC.lastSeen[d]=s.savedAt;
   {const days=db(); days[d]=daySummary(); store.set('days',days); renderDB();}
   $('#out').hidden=false;
   const f=s.files||{}; ['conf','lt','ht','xp'].forEach(k=>{const sl=document.querySelector(`input[data-k="${k}"]`).parentElement; sl.classList.remove('done'); sl.querySelector('.fn').textContent=f[k]?`已存：${f[k]}`:sl.dataset.ph;});
@@ -1049,9 +1177,9 @@ async function recalcAll(){
 function renderDB(){
   const days=db(); const ds=allDates();
   $('#p-db').innerHTML=`
-  <p class="note">每次上傳比對、或在待人工確認／Rebate／對照表做修改，都會自動存成那一天的紀錄。上方的「交易日」可以切換到任何已存的日期。資料存在這台電腦的這個瀏覽器裡，請定期按「完整備份」。</p>
-  <div class="toolbar"><button id="bkExport">完整備份（匯出）</button><label class="btn">還原備份<input type="file" id="bkImport" accept=".json" hidden></label>
-   <button id="recalcAll">用目前規則重算所有日期</button><span class="msg" id="dbMsg"></span></div>
+  <p class="note">每次上傳比對、或在待人工確認／Rebate／對照表做修改，都會自動存成那一天的紀錄。上方的「交易日」可以切換到任何已存的日期。資料存在這台電腦的瀏覽器裡；連結共用資料夾後，也會同步到公槽，其他人打開就能看到。</p>
+  <div class="toolbar"><button id="bkExport">完整備份（匯出）</button><label class="btn">還原備份<input type="file" id="bkImport" accept=".json,.gz" hidden></label>
+   <button id="recalcAll">用目前規則重算所有日期</button><button id="wipeAll" class="danger">清除所有資料</button><span class="msg" id="dbMsg"></span></div>
   <div class="scroll"><table><thead><tr><th>交易日</th><th class="r">成交值（億）</th><th class="r">手收（修正後）</th><th class="r">Rebate</th><th class="r">待確認</th><th>檔案</th><th></th></tr></thead><tbody>
   ${ds.length?ds.map(d=>{const x=days[d]||{};const f=x.files||{};return `<tr ${d===state.date?'class="done-row"':''}><td>${d}</td><td class="r">${x.gross!=null?fmtE(x.gross):'—'}</td><td class="r">${x.comm!=null?fmtN(x.comm):'—'}</td><td class="r">${x.rpt&&x.rpt.rebate!=null?fmtN(x.rpt.rebate):'—'}</td><td class="r">${x.todo!=null?(x.todo?`<span class="pending">${x.todo}</span>`:'0'):'—'}</td><td class="msg">${esc([f.conf,f.lt,f.ht,f.xp].filter(Boolean).join('、'))||(snapKeys.includes(d)?'':'只有摘要')}</td>
    <td><button class="dbo" data-d="${d}" ${snapKeys.includes(d)?'':'disabled'}>開啟</button> <button class="dbx" data-d="${d}">刪除</button></td></tr>`;}).join(''):'<tr><td colspan="7" class="msg">還沒有資料</td></tr>'}
@@ -1059,21 +1187,148 @@ function renderDB(){
   $('#p-db').querySelectorAll('.dbo').forEach(b=>b.addEventListener('click',()=>{loadDay(b.dataset.d).then(()=>showTab('report'));}));
   $('#p-db').querySelectorAll('.dbx').forEach(b=>b.addEventListener('click',async()=>{
     const d=b.dataset.d; if(!confirm(`刪除 ${d} 的資料？刪除後 MTD/YTD 不會再算到這一天。`))return;
-    const days=db(); delete days[d]; store.set('days',days); try{await IDB.del(d);}catch(e){} snapKeys=snapKeys.filter(x=>x!==d);
+    const days=db(); delete days[d]; store.set('days',days); try{await IDB.del(d);}catch(e){} await deleteRemoteDay(d); snapKeys=snapKeys.filter(x=>x!==d);
     fillDaySel(); if(d===state.date){const nx=allDates()[0]; if(nx&&snapKeys.includes(nx)) loadDay(nx); else location.reload();} else {renderDB(); renderMonth(); renderReport();}
   }));
   $('#bkExport').addEventListener('click',async()=>{
     const kv={}; try{for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i); if(k.startsWith('perfrpt:'))kv[k.slice(8)]=JSON.parse(localStorage.getItem(k));}}catch(e){}
     const snaps=await IDB.all().catch(()=>[]);
-    const blob=new Blob([JSON.stringify({tool:'業績日報',version:1,exported:new Date().toISOString(),kv,snaps})],{type:'application/json'});
-    const t=new Date(); await saveFile(`業績日報_完整備份_${t.getFullYear()}${String(t.getMonth()+1).padStart(2,'0')}${String(t.getDate()).padStart(2,'0')}.json`,blob,$('#dbMsg'));
+    const z=await gzBlob(JSON.stringify({tool:'業績日報',version:1,exported:new Date().toISOString(),kv,snaps})); const blob=z.blob;
+    const t=new Date(); await saveFile(`業績日報_完整備份_${t.getFullYear()}${String(t.getMonth()+1).padStart(2,'0')}${String(t.getDate()).padStart(2,'0')}.json${z.gz?'.gz':''}`,blob,$('#dbMsg'));
     $('#dbMsg').textContent=`已匯出 ${snaps.length} 天明細與所有設定。`;
   });
   $('#bkImport').addEventListener('change',e=>doRestore(e.target.files[0],m=>$('#dbMsg').textContent=m));
+  $('#wipeAll').addEventListener('click',async()=>{
+    if(!confirm('清除這台電腦裡的所有資料？包括每日紀錄、期初累計、目標、對照表、Rebate 規則和市場資料。\n建議先按「匯出」留一份。'))return;
+    try{ const ks=[]; for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i); if(k.startsWith('perfrpt:'))ks.push(k);} ks.forEach(k=>localStorage.removeItem(k)); }catch(_){}
+    store.mem={}; try{ await IDB.req(IDB.db.transaction('snap','readwrite').objectStore('snap').clear()); await IDB.req(IDB.db.transaction('meta','readwrite').objectStore('meta').clear()); }catch(_){}
+    location.reload();
+  });
   $('#recalcAll').addEventListener('click',async()=>{$('#dbMsg').textContent='重算中…'; const n=await recalcAll(); $('#dbMsg').textContent=`已用目前的規則重算 ${n} 天。`; renderDB();});
 }
+// ===== 共用資料夾同步（公槽）=====
+var SYNC=SYNC||{dir:null,ok:false,name:'',lastSeen:{},settingsTimer:null,busy:false};
+const PER_DATE=/^(mkt|brk|mkfetch):/;
+const fsSupported=typeof window.showDirectoryPicker==='function';
+const dayFile=d=>d.replace(/\//g,'-')+'.json';
+async function metaGet(k){ if(!IDB.ok) return null; return IDB.req(IDB.db.transaction('meta','readonly').objectStore('meta').get(k)).catch(()=>null); }
+async function metaPut(k,v){ if(!IDB.ok) return; return IDB.req(IDB.db.transaction('meta','readwrite').objectStore('meta').put(v,k)).catch(()=>{}); }
+async function fsWrite(dir,name,text){ const fh=await dir.getFileHandle(name,{create:true}); const w=await fh.createWritable(); await w.write(text); await w.close(); }
+async function fsRead(dir,name){ try{const fh=await dir.getFileHandle(name); return await (await fh.getFile()).text();}catch(e){ if(e.name==='NotFoundError') return null; throw e; } }
+async function daysDir(){ return SYNC.dir.getDirectoryHandle('days',{create:true}); }
+function syncStat(html){ $('#syncStat').innerHTML=html; }
+function renderSyncBtn(){
+  const b=$('#syncBtn'); setTimeout(()=>{ if(!(IDB.ok&&lsOK)&&$('#syncStat')) $('#syncStat').insertAdjacentHTML('beforeend',' <span class="pending">・這台電腦的瀏覽器不能存資料，關掉後要重新連結共用資料夾才會讀回</span>'); },0);
+  if(!fsSupported){ b.hidden=true; syncStat('<span class="msg">此瀏覽器不支援共用資料夾（請用 Chrome 或 Edge）</span>'); return; }
+  if(SYNC.ok){ b.textContent='從共用資料夾更新'; syncStat(`<span class="okc">⇄ 共用資料夾：${esc(SYNC.name)}</span> <button class="linkbtn" id="syncOff">中斷連結</button>`);
+    $('#syncOff').onclick=async()=>{ if(!confirm('中斷和共用資料夾的連結？資料仍會保留在這台電腦。'))return; SYNC.ok=false; SYNC.dir=null; await metaPut('dir',null); renderSyncBtn(); }; }
+  else if(SYNC.dir){ b.textContent='授權共用資料夾'; syncStat(`<span class="pending">共用資料夾「${esc(SYNC.name)}」需要授權</span>`); }
+  else { b.textContent='連結共用資料夾'; syncStat('<span class="msg">尚未連結共用資料夾，資料只存在這台電腦</span>'); }
+}
+function collectSettings(){
+  const kv={}; Object.assign(kv,store.mem);
+  try{for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i); if(k.startsWith('perfrpt:')){const kk=k.slice(8); if(!(kk in store.mem)) kv[kk]=JSON.parse(localStorage.getItem(k));}}}catch(e){}
+  Object.keys(kv).forEach(k=>{ if(k==='days'||k==='_t'||PER_DATE.test(k)) delete kv[k]; });
+  return kv;
+}
+async function pushSettings(){
+  if(!SYNC.ok) return;
+  try{ await fsWrite(SYNC.dir,'settings.json',JSON.stringify({savedAt:new Date().toISOString(),kv:collectSettings()})); }
+  catch(e){ syncFail(e); }
+}
+function scheduleSettings(){ if(!SYNC||!SYNC.ok) return; clearTimeout(SYNC.settingsTimer); SYNC.settingsTimer=setTimeout(pushSettings,800); }
+async function pushDay(d,snap){
+  if(!SYNC.ok) return {ok:false};
+  try{
+    const dd=await daysDir();
+    if(!snap){ snap=await IDB.get(d); if(!snap) return {ok:false}; }
+    let conflict=false;
+    const prevTxt=await fsRead(dd,dayFile(d));
+    if(prevTxt){ try{const prev=JSON.parse(prevTxt); if(SYNC.lastSeen[d]&&prev.savedAt>SYNC.lastSeen[d]&&prev.savedAt!==snap.savedAt){ conflict=true;
+      await fsWrite(dd,dayFile(d).replace('.json',`.覆蓋前備份_${Date.now()}.json`),prevTxt);} }catch(_){}}
+    const kv={}; ['mkt:','brk:'].forEach(p=>{const v=store.get(p+d,null); if(v!=null) kv[p+d]=v;});
+    await fsWrite(dd,dayFile(d),JSON.stringify({date:d,savedAt:snap.savedAt,summary:db()[d]||null,kv,snap}));
+    SYNC.lastSeen[d]=snap.savedAt;
+    return {ok:true,conflict};
+  }catch(e){ syncFail(e); return {ok:false}; }
+}
+async function deleteRemoteDay(d){ if(!SYNC.ok) return; try{ const dd=await daysDir(); await dd.removeEntry(dayFile(d)); }catch(e){} }
+function syncFail(e){
+  const nm=e&&e.name||''; let why;
+  if(nm==='NotAllowedError'||nm==='SecurityError') why='沒有共用資料夾的權限，請按「授權共用資料夾」，或確認你對公槽有寫入權限。';
+  else if(nm==='NotFoundError') why='找不到共用資料夾，可能是公槽沒有連線（例如 VPN 斷線）或資料夾被移動。';
+  else why=`寫入共用資料夾失敗（${esc(nm)}：${esc(e&&e.message||'')}）。`;
+  syncStat(`<span class="pending">⚠ ${why}</span>`);
+}
+// 從共用資料夾拉資料到這台電腦；回傳有更新的項目數
+async function pullAll(){
+  let n=0;
+  const st=await fsRead(SYNC.dir,'settings.json');
+  if(st){ try{const j=JSON.parse(st); const cur=collectSettings(); Object.entries(j.kv||{}).forEach(([k,v])=>{ if(JSON.stringify(cur[k])!==JSON.stringify(v)){ store.set(k,v); n++; } });}catch(_){} }
+  const dd=await daysDir(); const days=db();
+  for await (const [name,h] of dd.entries()){
+    if(h.kind!=='file'||!/^\d{4}-\d{2}-\d{2}\.json$/.test(name)) continue;
+    try{
+      const j=JSON.parse(await (await h.getFile()).text()); const d=j.date;
+      const local=await IDB.get(d);
+      if(!local||j.savedAt>local.savedAt){ await IDB.put(j.snap); if(j.summary) days[d]=j.summary; Object.entries(j.kv||{}).forEach(([k,v])=>store.set(k,v)); if(!snapKeys.includes(d))snapKeys.push(d); n++; }
+      SYNC.lastSeen[d]=j.savedAt>(local&&local.savedAt||'')?j.savedAt:(local&&local.savedAt);
+    }catch(_){}
+  }
+  store.set('days',days);
+  return n;
+}
+async function pushAll(){
+  const remote=new Set(); const dd=await daysDir();
+  for await (const [name,h] of dd.entries()) if(h.kind==='file') remote.add(name);
+  let n=0; for(const d of snapKeys){ if(!remote.has(dayFile(d))){ await pushDay(d); n++; } }
+  if(!(await fsRead(SYNC.dir,'settings.json'))) await pushSettings();
+  return n;
+}
+async function syncNow(reloadIfChanged=true){
+  if(SYNC.busy) return; SYNC.busy=true; syncStat('<span class="msg">同步中…</span>');
+  try{
+    const n=await pullAll(); const up=await pushAll();
+    if(n&&reloadIfChanged){ await applyPulled(); renderSyncBtn(); $('#syncStat').insertAdjacentHTML('beforeend',` <span class="okc">已從共用資料夾讀入 ${n} 項</span>`); return; }
+    renderSyncBtn(); $('#syncStat').insertAdjacentHTML('beforeend',` <span class="msg">已是最新${up?`，上傳 ${up} 天`:''}</span>`);
+  }catch(e){ syncFail(e); } finally{ SYNC.busy=false; }
+}
+async function applyPulled(){
+  savedMap=store.get('acmap',{}); alias=store.get('alias',{});
+  targets=store.get('targets',targets); base=store.get('base',base);
+  rules=store.get('rebateRules',null)||rules; exchRate=store.get('exchRate',exchRate); brkMap=store.get('brkMap',null)||brkMap;
+  snapKeys=(await IDB.keys().catch(()=>[])).map(String); fillDaySel();
+  const want=(state&&state.date&&snapKeys.includes(state.date))?state.date:allDates().filter(d=>snapKeys.includes(d))[0];
+  if(want) await loadDay(want);
+}
+async function testFolder(dir){
+  const name='_連線測試_'+Date.now()+'.txt'; await fsWrite(dir,name,'ok'); const t=await fsRead(dir,name); await dir.removeEntry(name); return t==='ok';
+}
+$('#syncBtn').addEventListener('click',async()=>{
+  try{
+    if(SYNC.ok){ await syncNow(); return; }
+    if(SYNC.dir){ const p=await SYNC.dir.requestPermission({mode:'readwrite'}); if(p!=='granted'){ syncStat('<span class="pending">沒有取得授權。</span>'); return; } SYNC.ok=true; renderSyncBtn(); await syncNow(); return; }
+    const dir=await window.showDirectoryPicker({id:'fdr-shared',mode:'readwrite'});
+    syncStat('<span class="msg">測試讀寫中…</span>');
+    if(!(await testFolder(dir))) throw new Error('讀回的內容不一致');
+    SYNC.dir=dir; SYNC.name=dir.name; SYNC.ok=true; await metaPut('dir',dir);
+    renderSyncBtn(); await syncNow();
+  }catch(e){ if(e&&e.name==='AbortError') return; syncFail(e); }
+});
+async function syncBoot(){ try{ await syncBoot2(); }catch(e){ renderSyncBtn(); } }
+async function syncBoot2(){
+  if(!fsSupported){ renderSyncBtn(); return; }
+  const dir=await metaGet('dir');
+  if(dir){ SYNC.dir=dir; SYNC.name=dir.name;
+    try{ if((await dir.queryPermission({mode:'readwrite'}))==='granted') SYNC.ok=true; }catch(_){}
+  }
+  renderSyncBtn();
+  let recent=false; try{recent=Number(sessionStorage.getItem('perfrpt-pulled')||0)>Date.now()-15000;}catch(_){}
+  if(SYNC.ok) await syncNow();
+}
+
 async function doRestore(file,say){
-  try{const j=JSON.parse(await file.text()); if(j.tool!=='業績日報'||!j.kv) throw new Error();
+  try{const j=JSON.parse(await readMaybeGz(file)); if(j.tool!=='業績日報'||!j.kv) throw new Error();
     if(!confirm(`還原備份會覆蓋目前的設定，並加入 ${(j.snaps||[]).length} 天的明細。繼續？`))return;
     Object.entries(j.kv).forEach(([k,v])=>store.set(k,v)); for(const s of (j.snaps||[])) await IDB.put(s);
     location.reload();
@@ -1083,9 +1338,10 @@ $('#bkImportTop').addEventListener('change',e=>doRestore(e.target.files[0],m=>{$
 async function boot(){
   document.querySelectorAll('.slot').forEach(sl=>sl.dataset.ph=sl.querySelector('.fn').textContent);
   const ok=await IDB.open();
-  if(!ok||!lsOK){$('#storeWarn').hidden=false;}
+  if(window.__wipeIDB&&IDB.ok){ try{ await IDB.req(IDB.db.transaction('snap','readwrite').objectStore('snap').clear()); await IDB.req(IDB.db.transaction('meta','readwrite').objectStore('meta').clear()); }catch(_){} }
   snapKeys=(await IDB.keys().catch(()=>[])).map(String);
   fillDaySel();
+  await syncBoot();
   const ds=allDates().filter(d=>snapKeys.includes(d));
   if(ds.length) await loadDay(ds[0]);
 }
@@ -1177,6 +1433,53 @@ function brokerSheet(){
   [...B.ranked.map((b,i)=>[i+1,b]),...B.others.map(b=>['',b])].forEach(([n,b])=>rows.push([n,b.name,...[0,1,2].flatMap(i=>[b.v[i]==null?null:Math.round(b.v[i]),p(b.v[i],B.fd[i]),p(b.v[i],B.md[i])])]));
   return XLSX.utils.aoa_to_sheet(rows);
 }
+
+// ===== 匯出給同事 / 匯入同事的檔案（合併，以較新的為準）=====
+async function exportShare(){
+  const snaps=await IDB.all().catch(()=>[]);
+  const days=db();
+  const out={tool:'業績日報',kind:'share',version:1,exported:new Date().toISOString(),
+    settingsAt:store.get('settingsAt',''),settings:collectSettings(),
+    days:snaps.map(sn=>{const d=sn.date; const kv={}; ['mkt:','brk:'].forEach(p=>{const v=store.get(p+d,null); if(v!=null)kv[p+d]=v;}); return {date:d,savedAt:sn.savedAt,summary:days[d]||null,kv,snap:sn};})};
+  const t=new Date(); const p2=n=>String(n).padStart(2,'0');
+  const z=await gzBlob(JSON.stringify(out));
+  const name=`FubonDailyReport_${t.getFullYear()}${p2(t.getMonth()+1)}${p2(t.getDate())}_${p2(t.getHours())}${p2(t.getMinutes())}.json${z.gz?'.gz':''}`;
+  await saveFile(name,z.blob,$('#msg'));
+  const kb=z.blob.size/1024; const sz=kb>1024?(kb/1024).toFixed(1)+' MB':Math.max(1,Math.round(kb))+' KB';
+  $('#msg').className='msg'; $('#msg').textContent=`已匯出 ${out.days.length} 天的資料和所有設定（${name}，${sz}）。`;
+}
+async function importShare(file){
+  const say=(m,err)=>{$('#msg').className=err?'msg err':'msg'; $('#msg').innerHTML=m;};
+  let j; try{ j=JSON.parse(await readMaybeGz(file)); }catch(e){ say('匯入失敗：'+(e.message&&e.message.includes('瀏覽器')?e.message:'檔案不是正確的格式。'),1); return; }
+  if(j.tool!=='業績日報'){ say('匯入失敗：這不是 Fubon Daily Report 匯出的檔案。',1); return; }
+  if(j.kind!=='share'){ // 舊的完整備份也接受：轉成同樣的格式
+    if(!j.kv){ say('匯入失敗：檔案內容不完整。',1); return; }
+    j={settingsAt:'',settings:Object.fromEntries(Object.entries(j.kv).filter(([k])=>k!=='days'&&!/^(mkt|brk|mkfetch):/.test(k))),
+      days:(j.snaps||[]).map(sn=>({date:sn.date,savedAt:sn.savedAt,summary:(j.kv.days||{})[sn.date]||null,kv:Object.fromEntries(Object.entries(j.kv).filter(([k])=>k.endsWith(':'+sn.date))),snap:sn}))};
+  }
+  let added=0,updated=0,kept=0; const days=db();
+  for(const d of (j.days||[])){
+    const local=await IDB.get(d.date);
+    if(!local||d.savedAt>local.savedAt){
+      await IDB.put(d.snap); if(d.summary) days[d.date]=d.summary;
+      Object.entries(d.kv||{}).forEach(([k,v])=>store.set(k,v));
+      if(!snapKeys.includes(d.date)) snapKeys.push(d.date);
+      local?updated++:added++;
+    } else kept++;
+  }
+  store.set('days',days);
+  let setMsg='';
+  const localAt=store.get('settingsAt','');
+  if(j.settings&&(!localAt||(j.settingsAt&&j.settingsAt>localAt))){
+    Object.entries(j.settings).forEach(([k,v])=>{ if(k!=='settingsAt') store.set(k,v); });
+    store.mem.settingsAt=j.settingsAt||new Date().toISOString(); try{localStorage.setItem('perfrpt:settingsAt',JSON.stringify(store.mem.settingsAt));}catch(_){}
+    setMsg='設定（規則、目標、期初累計、對照表）已更新為檔案中的版本。';
+  } else setMsg='設定沒有變動（你這邊已是相同或較新的版本）。';
+  await applyPulled();
+  say(`<span class="okc">✓ 匯入完成</span>：新增 ${added} 天、更新 ${updated} 天${kept?`、${kept} 天你這邊已是最新`:''}。${setMsg}`);
+}
+$('#shareExport').addEventListener('click',()=>exportShare().catch(e=>{$('#msg').className='msg err';$('#msg').textContent='匯出失敗：'+e.message;}));
+$('#shareImport').addEventListener('change',e=>{const f=e.target.files[0]; e.target.value=''; if(f) importShare(f);});
 
 </script>
 </body>
