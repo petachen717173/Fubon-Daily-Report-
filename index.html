@@ -263,7 +263,7 @@ const BAD_BPS = 14.25;
 
 function num(v) { if (v === null || v === undefined || v === '') return 0; const n = Number(String(v).replace(/,/g, '')); return isFinite(n) ? n : 0; }
 function symKey(v) { let s = String(v ?? '').trim(); s = s.split('-')[0].trim(); return s.replace(/^0+(?=.)/, ''); }
-function sideKey(v) { const s = String(v ?? '').trim().toUpperCase(); return s.startsWith('B') ? 'B' : (s.startsWith('S') ? 'S' : s); }
+function sideKey(v) { const s = String(v ?? '').trim().toUpperCase(); if (s === '1') return 'B'; if (s === '2' || s === '5' || s === '6') return 'S'; return s.startsWith('B') ? 'B' : (s.startsWith('S') ? 'S' : s); }
 function rowsOf(XLSX, ws) { return XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: null }); }
 
 function parseConf(XLSX, wb) {
@@ -289,14 +289,17 @@ function parseConf(XLSX, wb) {
 }
 
 function parseLT(XLSX, wb) {
+  // 支援兩種 DMA 匯出格式：舊版（CumQty、AllocAccount…）與新版 Main_Orders（全大寫欄位、FIXACCOUNT、SIDE 為 1/2）
   const out = [];
   wb.SheetNames.forEach(sn => {
     const data = XLSX.utils.sheet_to_json(wb.Sheets[sn], { defval: null });
-    data.forEach(d => {
-      const q = num(d.CumQty); if (q <= 0) return;
-      const alloc = String(d.AllocAccount ?? '').trim();
-      const key = /^A\d+/i.test(alloc) ? alloc : String(d.Account ?? '').trim();
-      out.push({ src: 'LT', key, party: String(d.PartyName ?? d.AccountName ?? key).trim(), sym: symKey(d.Symbol), bs: sideKey(d.Side), qty: q, val: q * num(d.AvgPx), tag: [d.ClientID, d.OnBehalfOfCompID, key].filter(Boolean).join(' ') });
+    data.forEach(raw => {
+      const d = {}; Object.keys(raw).forEach(k => { d[String(k).replace(/\s+/g, '').toUpperCase()] = raw[k]; });
+      const q = num(d.CUMQTY); if (q <= 0) return;
+      const alloc = String(d.ALLOCACCOUNT ?? '').trim();
+      const acct = String(d.FIXACCOUNT ?? d.ACCOUNT ?? '').trim();
+      const key = /^A\d+/i.test(alloc) ? alloc : acct;
+      out.push({ src: 'LT', key, party: String(d.PARTYNAME ?? d.ACCOUNTNAME ?? key).trim(), sym: symKey(d.SYMBOL), bs: sideKey(d.SIDE), qty: q, val: q * num(d.AVGPX), tag: [d.CLIENTID, d.ONBEHALFOFCOMPID, key].filter(Boolean).join(' ') });
     });
   });
   return out;
@@ -849,14 +852,19 @@ async function importMarketBook(file,say){
   }catch(e){ say(`<span class="pending">${esc(e.message)}</span>`); }
 }
 
+function normDate(v){ const t=String(v||'').trim(); if(!t) return '';
+  let m=t.match(/^(\d{4})(\d{2})(\d{2})$/); if(m) return `${m[1]}/${m[2]}/${m[3]}`;
+  m=t.match(/^(\d{2,4})\D+(\d{1,2})\D+(\d{1,2})$/); if(m){ let y=+m[1]; if(y<1000) y+=1911; return `${y}/${m[2].padStart(2,'0')}/${m[3].padStart(2,'0')}`; }
+  return t; }
 function cumulate(scope){ // scope 'mtd' | 'ytd'
   const d=state.date, ym=d.slice(0,7), y=d.slice(0,4);
   const inScope=x=>scope==='mtd'?x.slice(0,7)===ym:x.slice(0,4)===y;
   const sum={}; FIELDS.forEach(([k])=>sum[k]=0); let days=1, missing=new Set();
-  const useBase=base.date&&base.date<d&&inScope(base.date);
+  const bd=normDate(base.date);
+  const useBase=bd&&bd<d&&inScope(bd);
   if(useBase){ const b=base[scope]||{}; FIELDS.forEach(([k])=>{const v=pn(b[k]); if(v===null)missing.add(k); else sum[k]+=v;}); days+=Number(base[scope+'Days'])||0; }
   const saved=db();
-  Object.keys(saved).filter(x=>x<d&&inScope(x)&&(!useBase||x>base.date)).forEach(x=>{
+  Object.keys(saved).filter(x=>x<d&&inScope(x)&&(!useBase||x>bd)).forEach(x=>{
     const r=saved[x].rpt; days++;
     FIELDS.forEach(([k])=>{const v=r?r[k]:null; if(v===null||v===undefined)missing.add(k); else sum[k]+=v;});
   });
@@ -965,7 +973,7 @@ function renderInputs(R){
     const f=i.dataset.f.split('.'); const raw=i.value.trim();
     if(f[0]==='m'){const m=todayInput(); m[f[1]]=pn(raw); if(f[1].startsWith('adj')&&m[f[1]]===null)m[f[1]]=0; store.set(mktKey(),m); persist();}
     else if(f[0]==='t'){const v=pn(raw); if(v!==null){targets[f[1]]=v; store.set('targets',targets);}}
-    else if(f[0]==='b'){ if(f[1]==='date') base.date=raw; else if(f.length===2) base[f[1]]=pn(raw)||0; else {base[f[1]]=base[f[1]]||{}; base[f[1]][f[2]]=pn(raw);} store.set('base',base);}
+    else if(f[0]==='b'){ if(f[1]==='date') base.date=normDate(raw); else if(f.length===2) base[f[1]]=pn(raw)||0; else {base[f[1]]=base[f[1]]||{}; base[f[1]][f[2]]=pn(raw);} store.set('base',base);}
     const open=[...$('#reportInputs').querySelectorAll('details')].map(x=>x.open);
     renderReport(); [...$('#reportInputs').querySelectorAll('details')].forEach((x,j)=>x.open=open[j]);
   }));
