@@ -209,6 +209,8 @@ button.danger{color:var(--bad);border-color:var(--bad)}
 .rk4 th:nth-child(3),.rk4 td:nth-child(3){width:96px}
 .rk4 th:nth-child(4),.rk4 td:nth-child(4){width:98px}
 .rk4 td:nth-child(2){white-space:normal;word-break:break-word}
+.ovbox{display:inline-flex;gap:6px;align-items:center;font-size:13px;color:var(--mute)}
+.ovbox input{max-width:none}
 </style>
 </head>
 <body>
@@ -925,15 +927,15 @@ function applyHistBase(){
   store.set('base',base);
   return {daysOK,ytdDays:yd.length,mtdDays:md.length};
 }
+function defCutoff(){ const t=new Date(); t.setDate(t.getDate()-1); while(t.getDay()===0||t.getDay()===6) t.setDate(t.getDate()-1);
+  return `${t.getFullYear()}/${String(t.getMonth()+1).padStart(2,'0')}/${String(t.getDate()).padStart(2,'0')}`; }
 async function importOverview(file){
-  const say=(m,err)=>{ const el=$('#histMsg')||$('#msg'); el.className=err?'msg err':'msg'; el.innerHTML=m; };
+  const say=(m,err)=>{ window.__histSay={m,err}; const el=$('#histMsg')||$('#msg'); el.className=err?'msg err':'msg'; el.innerHTML=m; };
   try{
     const wb=XLSX.read(await file.arrayBuffer(),{type:'array'});
     const y=Number((file.name.match(/20\d\d/)||[])[0])||Number((state&&state.date||'').slice(0,4))||new Date().getFullYear();
-    const t=new Date(); t.setDate(t.getDate()-1); while(t.getDay()===0||t.getDay()===6) t.setDate(t.getDate()-1);
-    const def=`${t.getFullYear()}/${String(t.getMonth()+1).padStart(2,'0')}/${String(t.getDate()).padStart(2,'0')}`;
-    const ans=prompt('這份業績總覽的資料截至哪一天？（YYYY/MM/DD）\n截止日（含）之前用總覽的資料，之後的日期用工具每天的資料。',def);
-    if(!ans) return;
+    const el=$('#ovCut'); const ans=(el&&el.value.trim())||defCutoff();
+    say('讀取中…');
     const cutoff=normDate(ans); if(!/^\d{4}\/\d{2}\/\d{2}$/.test(cutoff)) throw new Error('日期格式不對：'+ans);
     const h=parseOverview(wb,y); h.cutoff=cutoff; h.year=Number(cutoff.slice(0,4)); h.importedAt=new Date().toISOString(); h.file=file.name;
     hist=h; histIndex=null; store.set('hist',hist);
@@ -1149,7 +1151,7 @@ function renderInputs(R){
   <div class="scroll" style="margin-top:8px"><table class="btab"><thead><tr><th>項目</th><th>MTD 累計</th><th>YTD 累計</th></tr></thead><tbody>
    ${FIELDS.map(([k,n])=>`<tr><td>${n}${missM.includes(k)||missY.includes(k)?' <span class="pending">缺</span>':''}</td><td>${inp('b.mtd.'+k,base.mtd[k])}</td><td>${inp('b.ytd.'+k,base.ytd[k])}</td></tr>`).join('')}
   </tbody></table></div></details>`;
-  {const hb=$('#histBase'); if(hb) hb.addEventListener('click',()=>{ if(!confirm('用業績總覽重新帶入期初累計？成交值、手收、DMA 成交值和交易日數會被覆蓋，Exchange fee 和 Rebate 會清空待你填寫。'))return; applyHistBase(); const open=[...$('#reportInputs').querySelectorAll('details')].map(x=>x.open); renderReport(); [...$('#reportInputs').querySelectorAll('details')].forEach((x,j)=>x.open=open[j]); persist(); });}
+  {const hb=$('#histBase'); if(hb) hb.addEventListener('click',()=>{ applyHistBase(); const open=[...$('#reportInputs').querySelectorAll('details')].map(x=>x.open); renderReport(); [...$('#reportInputs').querySelectorAll('details')].forEach((x,j)=>x.open=open[j]); persist(); });}
   {const mb=$('#mkBook'); if(mb) mb.addEventListener('change',e=>{const f=e.target.files[0]; e.target.value=''; if(!f)return; importMarketBook(f,m=>{ const open=[...$('#reportInputs').querySelectorAll('details')].map(x=>x.open); renderReport(); [...$('#reportInputs').querySelectorAll('details')].forEach((x,j)=>x.open=open[j]); $('#mkBookMsg').innerHTML=m; });});}
   $('#reportInputs').querySelectorAll('input[data-f]').forEach(i=>i.addEventListener('change',()=>{
     const f=i.dataset.f.split('.'); const raw=i.value.trim();
@@ -1417,7 +1419,7 @@ function renderDB(){
   $('#p-db').innerHTML=`
   <p class="note">每次上傳比對、或在待人工確認／Rebate／對照表做修改，都會自動存成那一天的紀錄。上方的「交易日」可以切換到任何已存的日期。資料存在這台電腦的瀏覽器裡；連結共用資料夾後，也會同步到公槽，其他人打開就能看到。</p>
   <div class="toolbar"><button id="bkExport">完整備份（匯出）</button><label class="btn">還原備份<input type="file" id="bkImport" accept=".json,.gz" hidden></label>
-   <button id="recalcAll">用目前規則重算所有日期</button><label class="btn">匯入業績總覽（歷史資料）<input type="file" id="ovImport" accept=".xlsx,.xlsm,.xls" hidden></label><button id="wipeAll" class="danger">清除所有資料</button><span class="msg" id="dbMsg"></span></div><p class="msg" id="histMsg">${hist?`已匯入業績總覽（${esc(hist.file||"")}），截至 ${hist.cutoff}`:"尚未匯入業績總覽歷史資料"}</p>
+   <button id="recalcAll">用目前規則重算所有日期</button><span class="ovbox">業績總覽截止日 <input type="text" id="ovCut" value="${esc(hist?hist.cutoff:defCutoff())}" style="width:110px"><label class="btn">匯入業績總覽（歷史資料）<input type="file" id="ovImport" accept=".xlsx,.xlsm,.xls" hidden></label></span><button id="wipeAll" class="danger">清除所有資料</button><span class="msg" id="dbMsg"></span></div><p class="${window.__histSay&&window.__histSay.err?'msg err':'msg'}" id="histMsg">${window.__histSay?window.__histSay.m:(hist?`已匯入業績總覽（${esc(hist.file||"")}），截至 ${hist.cutoff}`:"尚未匯入業績總覽歷史資料")}</p>
   <div class="scroll"><table><thead><tr><th>交易日</th><th class="r">成交值（億）</th><th class="r">手收（修正後）</th><th class="r">Rebate</th><th class="r">待確認</th><th>檔案</th><th></th></tr></thead><tbody>
   ${ds.length?ds.map(d=>{const x=days[d]||{};const f=x.files||{};return `<tr ${d===state.date?'class="done-row"':''}><td>${d}</td><td class="r">${x.gross!=null?fmtE(x.gross):'—'}</td><td class="r">${x.comm!=null?fmtN(x.comm):'—'}</td><td class="r">${x.rpt&&x.rpt.rebate!=null?fmtN(x.rpt.rebate):'—'}</td><td class="r">${x.todo!=null?(x.todo?`<span class="pending">${x.todo}</span>`:'0'):'—'}</td><td class="msg">${esc([f.conf,f.lt,f.ht,f.xp].filter(Boolean).join('、'))||(snapKeys.includes(d)?'':'只有摘要')}</td>
    <td><button class="dbo" data-d="${d}" ${snapKeys.includes(d)?'':'disabled'}>開啟</button> <button class="dbx" data-d="${d}">刪除</button></td></tr>`;}).join(''):'<tr><td colspan="7" class="msg">還沒有資料</td></tr>'}
