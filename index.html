@@ -907,6 +907,24 @@ function parseOverview(wb,year){
   Object.values(dm).forEach(o=>{ (months[o.m]=months[o.m]||[]).push({client:o.client,turn:o.turn,comm:o.comm,net:o.net,rebate:o.rebate,research:o.research,dma:o.dma}); });
   return {year,months,detail,prefixName};
 }
+
+// 用業績總覽帶入期初累計（Exchange fee、Rebate 以外）
+function applyHistBase(){
+  if(!hist) return null;
+  const c=hist.cutoff, cm=Number(c.slice(5,7));
+  const sum=(pred)=>{ let t=0,cm2=0,d=0; Object.entries(hist.months).forEach(([m,rows])=>{ if(!pred(Number(m))) return; rows.forEach(r=>{ t+=r.turn; cm2+=r.comm; if(r.dma) d+=r.turn; }); }); return {turn:t,comm:cm2,dma:d}; };
+  const Y=sum(m=>m<=cm), M=sum(m=>m===cm);
+  const mk=Object.keys(mktHist||{}).filter(x=>x<=c);
+  const yd=mk.filter(x=>x.slice(0,4)===c.slice(0,4)).sort(), md=yd.filter(x=>x.slice(0,7)===c.slice(0,7));
+  if(!yd.includes(c)) yd.push(c); if(!md.includes(c)&&c.slice(0,7)===c.slice(0,7)) md.push(c);
+  const daysOK=yd.length>1&&yd.slice().sort()[0].slice(5)<='01/07';
+  base.date=c;
+  base.ytd=Object.assign({},base.ytd||{},{turn:Y.turn,comm:Y.comm,dma:Y.dma,exch:null,rebate:null});
+  base.mtd=Object.assign({},base.mtd||{},{turn:M.turn,comm:M.comm,dma:M.dma,exch:null,rebate:null});
+  if(daysOK){ base.ytdDays=yd.length; base.mtdDays=md.length; }
+  store.set('base',base);
+  return {daysOK,ytdDays:yd.length,mtdDays:md.length};
+}
 async function importOverview(file){
   const say=(m,err)=>{ const el=$('#histMsg')||$('#msg'); el.className=err?'msg err':'msg'; el.innerHTML=m; };
   try{
@@ -924,7 +942,8 @@ async function importOverview(file){
     let added=0; Object.entries(accs).forEach(([a,set])=>{ if(set.size===1&&!savedMap[a]&&![...set][0].includes('綜合')){ savedMap[a]={party:[...set][0],src:null}; added++; } });
     store.set('acmap',savedMap);
     const tot=Object.values(h.months).flat().reduce((a,r)=>a+r.turn,0);
-    say(`<span class="okc">✓ 已匯入業績總覽</span>：${Object.keys(h.months).length} 個月、合計 ${fmtE(tot)} 億，截至 ${cutoff}；對照表新增 ${added} 個帳號。`);
+    const bd=applyHistBase();
+    say(`<span class="okc">✓ 已匯入業績總覽</span>：${Object.keys(h.months).length} 個月、合計 ${fmtE(tot)} 億，截至 ${cutoff}；對照表新增 ${added} 個帳號。期初累計已改成截至 ${cutoff}，自動帶入成交值、手收、DMA 成交值${bd&&bd.daysOK?`和交易日數（MTD ${bd.mtdDays}、YTD ${bd.ytdDays} 天）`:'（交易日數請手動填，因為市場狀況 Excel 沒有從年初開始）'}；<b>請到報表下方期初累計補填 ${cutoff} 的 Exchange fee 和 Rebate</b>。`);
     if(state) recompute();
   }catch(e){ say('匯入失敗：'+esc(e.message),1); }
 }
@@ -1014,6 +1033,11 @@ function cumulate(scope){ // scope 'mtd' | 'ytd'
   const inScope=x=>scope==='mtd'?x.slice(0,7)===ym:x.slice(0,4)===y;
   const sum={}; FIELDS.forEach(([k])=>sum[k]=0); let days=1, missing=new Set();
   const bd=normDate(base.date);
+  if(bd&&bd===d){ // 期初累計就截至今天（例如業績總覽截至今天）：直接用期初，不再加今天
+    const b=base[scope]||{}; FIELDS.forEach(([k])=>{const v=pn(b[k]); if(v===null)missing.add(k); else sum[k]=v;}); days=Number(base[scope+'Days'])||1;
+    const hs0=histSum(scope,d); if(hs0){ ['mkt','fb','fs'].forEach(k=>{sum[k]=hs0[k]; missing.delete(k);}); }
+    return {sum,days,missing,valid:true,hist:!!hs0};
+  }
   const useBase=bd&&bd<d&&inScope(bd);
   if(useBase){ const b=base[scope]||{}; FIELDS.forEach(([k])=>{const v=pn(b[k]); if(v===null)missing.add(k); else sum[k]+=v;}); days+=Number(base[scope+'Days'])||0; }
   const saved=db();
@@ -1119,11 +1143,13 @@ function renderInputs(R){
     <label>每日交易值目標（億）${inp('t.turnD',targets.turnD)}</label><label>每日手收目標${inp('t.commD',targets.commD)}</label><label>每億手收目標（自動）<input type="text" disabled value="${targets.turnD?f0(targets.commD/targets.turnD):''}"></label>
   </div></details>
   <details ${missM.length||missY.length?'open':''}><summary>期初累計${missM.length||missY.length?'<span class="pending"> ・ MTD / YTD 有欄位缺資料</span>':''}</summary>
+  ${hist?`<div class="mkimp"><button id="histBase">用業績總覽帶入（截至 ${hist.cutoff}）</button><span class="msg">Exchange fee、Rebate 需要手動填</span></div>`:''}
   <div class="grid"><label>累計截止日（YYYY/MM/DD）<input type="text" class="num" data-f="b.date" value="${esc(base.date)}" placeholder="2026/10/20"></label>
     <label>MTD 已累計交易日數${inp('b.mtdDays',base.mtdDays)}</label><label>YTD 已累計交易日數${inp('b.ytdDays',base.ytdDays)}</label></div>
   <div class="scroll" style="margin-top:8px"><table class="btab"><thead><tr><th>項目</th><th>MTD 累計</th><th>YTD 累計</th></tr></thead><tbody>
    ${FIELDS.map(([k,n])=>`<tr><td>${n}${missM.includes(k)||missY.includes(k)?' <span class="pending">缺</span>':''}</td><td>${inp('b.mtd.'+k,base.mtd[k])}</td><td>${inp('b.ytd.'+k,base.ytd[k])}</td></tr>`).join('')}
   </tbody></table></div></details>`;
+  {const hb=$('#histBase'); if(hb) hb.addEventListener('click',()=>{ if(!confirm('用業績總覽重新帶入期初累計？成交值、手收、DMA 成交值和交易日數會被覆蓋，Exchange fee 和 Rebate 會清空待你填寫。'))return; applyHistBase(); const open=[...$('#reportInputs').querySelectorAll('details')].map(x=>x.open); renderReport(); [...$('#reportInputs').querySelectorAll('details')].forEach((x,j)=>x.open=open[j]); persist(); });}
   {const mb=$('#mkBook'); if(mb) mb.addEventListener('change',e=>{const f=e.target.files[0]; e.target.value=''; if(!f)return; importMarketBook(f,m=>{ const open=[...$('#reportInputs').querySelectorAll('details')].map(x=>x.open); renderReport(); [...$('#reportInputs').querySelectorAll('details')].forEach((x,j)=>x.open=open[j]); $('#mkBookMsg').innerHTML=m; });});}
   $('#reportInputs').querySelectorAll('input[data-f]').forEach(i=>i.addEventListener('change',()=>{
     const f=i.dataset.f.split('.'); const raw=i.value.trim();
