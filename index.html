@@ -211,12 +211,16 @@ button.danger{color:var(--bad);border-color:var(--bad)}
 .rk4 td:nth-child(2){white-space:normal;word-break:break-word}
 .ovbox{display:inline-flex;gap:6px;align-items:center;font-size:13px;color:var(--mute)}
 .ovbox input{max-width:none}
+.rcbox{max-width:none;margin-bottom:14px}
+.rcgrid{display:flex;gap:16px;flex-wrap:wrap;font-size:13px;color:var(--mute)}
+.rcgrid label{display:flex;align-items:center;gap:6px}
+.rcgrid input{max-width:none;text-align:right}
 </style>
 </head>
 <body>
 <div class="wrap">
 <header>
-  <div><h1>Fubon Daily Report</h1><div class="sub">Trade Confirm 為準，回溯 DMA / FOMS / K Way 下單檔歸戶，並修正 0.1425% 預設手收</div></div>
+  <div><h1>Fubon Daily Report</h1><div class="sub">Trade Confirm 為準，回溯 DMA / FOMS / K Way 下單檔歸戶，並修正預設手收</div></div>
   <div class="daybox"><label for="daySel">交易日</label><select id="daySel"></select><span id="saveStat"></span></div>
 </header>
 <div class="warn" id="saveWhy" hidden></div>
@@ -240,7 +244,7 @@ button.danger{color:var(--bad);border-color:var(--bad)}
     <button class="tab" role="tab" data-p="report" aria-selected="true">報表</button>
     <button class="tab" role="tab" data-p="rank">本日排名</button>
     <button class="tab" role="tab" data-p="todo">待人工確認</button>
-    <button class="tab peta" role="tab" data-p="peta" aria-expanded="false">peta ▾</button>
+    <button class="tab peta" role="tab" data-p="peta" aria-expanded="false">dealer ▾</button>
   </div>
   <div class="subtabs" id="subtabs" hidden>
     <button class="tab" role="tab" data-p="fix">手收修正</button>
@@ -268,9 +272,9 @@ button.danger{color:var(--bad);border-color:var(--bad)}
 
 <script>
 // ===== Engine: parse Trade Conf / LT / HT / XPATS, map, fix commission =====
-const RATE = { LT: 0.0005, HT: 0.0008, XP: 0.0003 };
+const RATE = { LT: 0.0003, HT: 0.0005, XP: 0.0003 };
 const SRC_LABEL = { LT: 'DMA', HT: 'FOMS', XP: 'K Way', NU: 'NuOMS' };
-const BAD_BPS = 14.25;
+var BAD_BPS = 14.25;
 
 function num(v) { if (v === null || v === undefined || v === '') return 0; const n = Number(String(v).replace(/,/g, '')); return isFinite(n) ? n : 0; }
 function symKey(v) { let s = String(v ?? '').trim(); s = s.split('-')[0].trim(); return s.replace(/^0+(?=.)/, ''); }
@@ -719,15 +723,26 @@ function renderTodo(){
   });
 }
 
+let rateCfg=store.get('rateCfg',null);
+if(!rateCfg||(rateCfg.LT===5&&rateCfg.HT===8&&rateCfg.XP===3&&!store.get('rateCfgV2',false))){ rateCfg=Object.assign({bad:14.25,NU:null},rateCfg||{},{LT:3,HT:5,XP:3}); }
+function applyRateCfg(){ BAD_BPS=Number(rateCfg.bad)||14.25; ['LT','HT','XP','NU'].forEach(k=>{ const v=rateCfg[k]; if(v===null||v===''||v===undefined||isNaN(v)) delete RATE[k]; else RATE[k]=Number(v)/1e4; }); }
+applyRateCfg();
+function rateBox(){
+  const f=(k,lab)=>`<label>${lab}<input type="text" class="rc num" data-k="${k}" value="${rateCfg[k]??''}" placeholder="不修正" style="width:90px"> bps</label>`;
+  return `<div class="upbox rcbox"><h3>手收修正設定</h3><p class="note">Trade Confirm 上手續費等於「預設費率」的單，會依對到的通路改成下面的費率（1 bps = 0.01%）。留空代表那個通路不修正、維持原本的手續費。改完會套用到目前的日期；過去的日期請到「資料庫」按「用目前規則重算所有日期」。</p>
+   <div class="rcgrid">${f('bad','要修正的預設費率')}${f('LT','DMA')}${f('HT','FOMS')}${f('XP','K Way')}${f('NU','NuOMS')}</div></div>`;
+}
+function bindRateBox(){ document.querySelectorAll('.rc').forEach(i=>i.addEventListener('change',()=>{ const k=i.dataset.k; const v=i.value.trim(); rateCfg[k]=v===''?(k==='bad'?14.25:null):Number(v.replace(/,/g,'')); store.set('rateCfg',rateCfg); store.set('rateCfgV2',true); applyRateCfg(); recompute(); showTab('fix'); })); }
 function renderFix(){
   const list=state.rows.filter(r=>r.isBad);
-  if(!list.length){$('#p-fix').innerHTML='<div class="empty">今天沒有 0.1425% 的成交。</div>';return;}
+  if(!list.length){$('#p-fix').innerHTML=rateBox()+`<div class="empty">今天沒有手續費 ${BAD_BPS} bps 的成交。</div>`;bindRateBox();return;}
   const b=list.reduce((a,r)=>a+r.comm,0), f=list.reduce((a,r)=>a+r.commFixed,0);
-  $('#p-fix').innerHTML=`<p class="note">Trade Confirm 預設 14.25 bps 的成交，依對到的通路改成 DMA 0.05%、FOMS 0.08%、K Way 0.03%。同一筆對到多個通路時，依各通路成交股數拆開計算。標示「待指定」的部分還沒有通路，暫時保留原手收。</p>
+  $('#p-fix').innerHTML=rateBox()+`<p class="note">Trade Confirm 預設 ${BAD_BPS} bps 的成交，依對到的通路修正費率（設定在上方）。同一筆對到多個通路時，依各通路成交股數拆開計算。標示「待指定」的部分還沒有通路，暫時保留原手收。</p>
   <div class="scroll"><table><thead><tr><th>帳號</th><th>客戶</th><th>股票</th><th>B/S</th><th class="r">股數</th><th class="r">金額</th><th>拆分</th><th class="r">原手收</th><th class="r">修正後</th></tr></thead><tbody>
   ${list.map(r=>`<tr><td>${r.ac}</td><td>${esc([...new Set(r.parts.map(p=>p.client||'（未指定）'))].join(' / '))}</td><td>${esc(r.code)}</td><td>${r.bs}</td><td class="r">${fmtN(r.sh)}</td><td class="r">${fmtN(r.gross)}</td>
    <td>${r.parts.map(p=>p.src?`${chip(p.src)}${fmtN(p.qty)}`:`<span class="pending">待指定 ${fmtN(p.qty)}</span>`).join(' ')}</td><td class="r">${fmtN(r.comm)}</td><td class="r ${r.pending?'pending':''}">${fmtN(r.commFixed)}</td></tr>`).join('')}
   <tr class="total"><td colspan="7">合計 ${list.length} 筆</td><td class="r">${fmtN(b)}</td><td class="r">${fmtN(f)}</td></tr></tbody></table></div>`;
+  bindRateBox();
 }
 
 let detailQ='';
@@ -785,7 +800,7 @@ function showTab(p){
   document.querySelectorAll('#tabs .tab').forEach(t=>t.setAttribute('aria-selected',t.dataset.p===p||(sub&&t.dataset.p==='peta')));
   document.querySelectorAll('#subtabs .tab').forEach(t=>t.setAttribute('aria-selected',t.dataset.p===p));
   $('#subtabs').hidden=!sub; document.querySelector('.tab.peta').setAttribute('aria-expanded',sub);
-  document.querySelector('.tab.peta').textContent=sub?'peta ▴':'peta ▾';
+  document.querySelector('.tab.peta').textContent=sub?'dealer ▴':'dealer ▾';
   document.querySelectorAll('.panel').forEach(x=>x.classList.toggle('on',x.id==='p-'+p||x.id==='p-'+p+'-wrap'));
 }
 $('#tabs').addEventListener('click',e=>{const t=e.target.closest('.tab');if(!t)return; if(t.dataset.p==='peta'&&!$('#subtabs').hidden){showTab('report');return;} showTab(t.dataset.p);});
