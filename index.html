@@ -275,6 +275,7 @@ button.danger{color:var(--bad);border-color:var(--bad)}
 const RATE = { LT: 0.0003, HT: 0.0005, XP: 0.0003 };
 const SRC_LABEL = { LT: 'DMA', HT: 'FOMS', XP: 'K Way', NU: 'NuOMS' };
 var BAD_BPS = 14.25;
+var DMA_CAP = null;   // DMA 的單費率高於這個 bps（且不是預設 0.1425%），就改用 DMA 預設費率；null = 不檢查
 
 function num(v) { if (v === null || v === undefined || v === '') return 0; const n = Number(String(v).replace(/,/g, '')); return isFinite(n) ? n : 0; }
 function symKey(v) { let s = String(v ?? '').trim(); s = s.split('-')[0].trim(); return s.replace(/^0+(?=.)/, ''); }
@@ -312,9 +313,14 @@ function parseLT(XLSX, wb) {
       const d = {}; Object.keys(raw).forEach(k => { d[String(k).replace(/\s+/g, '').toUpperCase()] = raw[k]; });
       const q = num(d.CUMQTY); if (q <= 0) return;
       const alloc = String(d.ALLOCACCOUNT ?? '').trim();
-      const acct = String(d.FIXACCOUNT ?? d.ACCOUNT ?? '').trim();
+      // 帳號：在 FIXACCOUNT / ACCOUNT 中找 7 位數的那個（有些匯出版本 FIXACCOUNT 是投資人代號、ACCOUNT 存成 9919397.0）
+      const accCands = [d.FIXACCOUNT, d.ACCOUNT].map(v => String(v ?? '').trim().replace(/\.0+$/, ''));
+      const acct = accCands.find(v => /^\d{7}$/.test(v)) || accCands.find(v => v) || '';
+      // 買賣別：有些匯出版本 SIDE 和 ORDSTATUS 的標題對調，哪一欄像買賣別就用哪一欄
+      let bs = sideKey(d.SIDE); if (bs !== 'B' && bs !== 'S') { const alt = sideKey(d.ORDSTATUS); if (alt === 'B' || alt === 'S') bs = alt; }
       const key = /^A\d+/i.test(alloc) ? alloc : acct;
-      out.push({ src: 'LT', key, party: String(d.PARTYNAME ?? d.ACCOUNTNAME ?? key).trim(), sym: symKey(d.SYMBOL), bs: sideKey(d.SIDE), qty: q, val: q * num(d.AVGPX), tag: [d.CLIENTID, d.ONBEHALFOFCOMPID, key].filter(Boolean).join(' ') });
+      const tm = String(d.RECEIVEDTIME ?? d.CREATETIME ?? d.TRANSACTTIME ?? '').match(/^(\d{4})(\d{2})(\d{2})/);
+      out.push({ src: 'LT', key, party: String(d.PARTYNAME ?? d.ACCOUNTNAME ?? key).trim(), sym: symKey(d.SYMBOL), bs, qty: q, val: q * num(d.AVGPX), day: tm ? `${tm[1]}/${tm[2]}/${tm[3]}` : null, tag: [d.CLIENTID, d.ONBEHALFOFCOMPID, key].filter(Boolean).join(' ') });
     });
   });
   return out;
@@ -462,7 +468,9 @@ function finalize(rows, manual, alias) {
   manual = manual || {}; alias = alias || {};
   const nm = p => alias[p] || p;
   rows.forEach(r => {
-    r.isBad = Math.abs(r.bps - BAD_BPS) < 0.05;
+    // 零股金額小，四捨五入後 bps 會變成 14.19、14.01 之類：用「手續費 ≈ 金額 × 預設費率」判斷
+    r.dmaHigh = false;
+    r.isBad = Math.abs(r.bps - BAD_BPS) < 0.05 || (r.gross > 0 && Math.abs(r.comm - r.gross * BAD_BPS / 1e4) <= 1);
     const m = manual[r.id];
     r.parts = r.allocs.map(a => ({ ...a }));
     if (r.rem > 0) r.parts.push({ party: m && m.party ? m.party : null, src: m && m.src ? m.src : null, qty: r.rem, how: 'manual', tags: '' });
@@ -474,10 +482,12 @@ function finalize(rows, manual, alias) {
         if (p.src && RATE[p.src]) p.comm = Math.round(p.gross * RATE[p.src]);
         else if (p.src) p.comm = r.comm * p.qty / r.sh;
         else { p.comm = r.comm * p.qty / r.sh; pending = true; }
+      } else if (p.src === 'LT' && DMA_CAP != null && RATE.LT && r.bps > DMA_CAP + 0.005) {
+        p.comm = Math.round(p.gross * RATE.LT); p.dmaHigh = true; r.dmaHigh = true;
       } else p.comm = r.comm * p.qty / r.sh;
       fixed += p.comm;
     });
-    r.commFixed = r.isBad ? Math.round(fixed) : r.comm;
+    r.commFixed = (r.isBad || r.dmaHigh) ? Math.round(fixed) : r.comm;
     r.pending = pending;
     r.unresolved = r.parts.some(p => !p.party || (r.isBad && !p.src));
   });
@@ -594,6 +604,7 @@ $('#run').addEventListener('click',async()=>{
     const m=runMatch(conf.rows,orders,partyMap());
     manual={};
     state={date,...m,orders,parties:[...new Set(orders.map(o=>o.party).filter(Boolean))],files:{conf:files.conf,lt:files.lt,ht:files.ht,xp:wbs.xp?files.xp:undefined}};
+    if(prev&&prev.extra&&prev.extra.length) state.extra=prev.extra;
     if(prev&&prev.manual){ const old={}; prev.rows.forEach(r=>{if(prev.manual[r.id])old[rowKey(r)]=prev.manual[r.id];}); state.rows.forEach(r=>{if(old[rowKey(r)])manual[r.id]=old[rowKey(r)];}); }
     // prefill suggestion from saved map
     state.rows.filter(r=>r.rem>0&&savedOf(r.ac)&&!manual[r.id]).forEach(r=>{const v=savedOf(r.ac); manual[r.id]={party:v.party,src:v.src||null}});
@@ -601,9 +612,12 @@ $('#run').addEventListener('click',async()=>{
     $('#out').hidden=false;
     $('#msg').className='msg';
     const cnt=k=>orders.filter(o=>o.src===k).length; const warn=[];
+    const dd={}; orders.forEach(o=>{ if(o.day) dd[o.day]=(dd[o.day]||0)+1; }); const ltDay=Object.keys(dd).sort((a,b)=>dd[b]-dd[a])[0];
+    if(ltDay&&ltDay!==date){ if(!confirm(`日期不一致：Trade Confirm 是 ${date}，但 DMA 下單檔是 ${ltDay}。\n可能放錯檔案。仍要繼續比對嗎？`)) return; }
+    if(ltDay&&ltDay!==date) $('#msg').className='msg err';
     if(!cnt('LT')) warn.push('DMA'); if(!cnt('HT')) warn.push('FOMS'); if(wbs.xp&&!cnt('XP')) warn.push('K Way');
-    $('#msg').className=warn.length?'msg err':'msg';
-    $('#msg').textContent=`讀到 ${conf.rows.length} 筆成交；下單紀錄 DMA ${cnt('LT')} 筆、FOMS ${cnt('HT')} 筆${wbs.xp?`、K Way ${cnt('XP')} 筆`:''}。`+(warn.length?` ⚠ ${warn.join('、')} 檔沒有讀到任何成交，請確認放對檔案、格式沒變，而且是收盤後匯出的。`:'');
+    $('#msg').className=(warn.length||(ltDay&&ltDay!==date))?'msg err':'msg';
+    $('#msg').textContent=`讀到 ${conf.rows.length} 筆成交；下單紀錄 DMA ${cnt('LT')} 筆、FOMS ${cnt('HT')} 筆${wbs.xp?`、K Way ${cnt('XP')} 筆`:''}。`+(warn.length?` ⚠ ${warn.join('、')} 檔沒有讀到任何成交，請確認放對檔案、格式沒變，而且是收盤後匯出的。`:'')+(ltDay&&ltDay!==date?` ⚠ 日期不一致：Trade Confirm ${date}、DMA ${ltDay}。`:'');
   }catch(e){ $('#msg').className='msg err'; $('#msg').textContent=e.message; console.error(e); }
 });
 
@@ -724,24 +738,26 @@ function renderTodo(){
 }
 
 let rateCfg=store.get('rateCfg',null);
+
 if(!rateCfg||(rateCfg.LT===5&&rateCfg.HT===8&&rateCfg.XP===3&&!store.get('rateCfgV2',false))){ rateCfg=Object.assign({bad:14.25,NU:null},rateCfg||{},{LT:3,HT:5,XP:3}); }
-function applyRateCfg(){ BAD_BPS=Number(rateCfg.bad)||14.25; ['LT','HT','XP','NU'].forEach(k=>{ const v=rateCfg[k]; if(v===null||v===''||v===undefined||isNaN(v)) delete RATE[k]; else RATE[k]=Number(v)/1e4; }); }
+function applyRateCfg(){ BAD_BPS=Number(rateCfg.bad)||14.25; DMA_CAP=(rateCfg.dmaCap===undefined||rateCfg.dmaCap===null||rateCfg.dmaCap==='')?null:Number(rateCfg.dmaCap); ['LT','HT','XP','NU'].forEach(k=>{ const v=rateCfg[k]; if(v===null||v===''||v===undefined||isNaN(v)) delete RATE[k]; else RATE[k]=Number(v)/1e4; }); }
 applyRateCfg();
 function rateBox(){
   const f=(k,lab)=>`<label>${lab}<input type="text" class="rc num" data-k="${k}" value="${rateCfg[k]??''}" placeholder="不修正" style="width:90px"> bps</label>`;
   return `<div class="upbox rcbox"><h3>手收修正設定</h3><p class="note">Trade Confirm 上手續費等於「預設費率」的單，會依對到的通路改成下面的費率（1 bps = 0.01%）。留空代表那個通路不修正、維持原本的手續費。改完會套用到目前的日期；過去的日期請到「資料庫」按「用目前規則重算所有日期」。</p>
-   <div class="rcgrid">${f('bad','要修正的預設費率')}${f('LT','DMA')}${f('HT','FOMS')}${f('XP','K Way')}${f('NU','NuOMS')}</div></div>`;
+   <div class="rcgrid">${f('bad','要修正的預設費率')}${f('LT','DMA')}${f('HT','FOMS')}${f('XP','K Way')}${f('NU','NuOMS')}</div>
+   <div class="rcgrid" style="margin-top:8px"><label>DMA 的單費率超過<input type="text" class="rc num" data-k="dmaCap" value="${rateCfg.dmaCap??''}" placeholder="不檢查" style="width:90px"> bps 時，也改用上面的 DMA 費率</label></div></div>`;
 }
 function bindRateBox(){ document.querySelectorAll('.rc').forEach(i=>i.addEventListener('change',()=>{ const k=i.dataset.k; const v=i.value.trim(); rateCfg[k]=v===''?(k==='bad'?14.25:null):Number(v.replace(/,/g,'')); store.set('rateCfg',rateCfg); store.set('rateCfgV2',true); applyRateCfg(); recompute(); showTab('fix'); })); }
 function renderFix(){
-  const list=state.rows.filter(r=>r.isBad);
-  if(!list.length){$('#p-fix').innerHTML=rateBox()+`<div class="empty">今天沒有手續費 ${BAD_BPS} bps 的成交。</div>`;bindRateBox();return;}
+  const list=state.rows.filter(r=>r.isBad||r.dmaHigh);
+  if(!list.length){$('#p-fix').innerHTML=rateBox()+`<div class="empty">今天沒有需要修正手續費的成交。</div>`;bindRateBox();return;}
   const b=list.reduce((a,r)=>a+r.comm,0), f=list.reduce((a,r)=>a+r.commFixed,0);
-  $('#p-fix').innerHTML=rateBox()+`<p class="note">Trade Confirm 預設 ${BAD_BPS} bps 的成交，依對到的通路修正費率（設定在上方）。同一筆對到多個通路時，依各通路成交股數拆開計算。標示「待指定」的部分還沒有通路，暫時保留原手收。</p>
-  <div class="scroll"><table><thead><tr><th>帳號</th><th>客戶</th><th>股票</th><th>B/S</th><th class="r">股數</th><th class="r">金額</th><th>拆分</th><th class="r">原手收</th><th class="r">修正後</th></tr></thead><tbody>
-  ${list.map(r=>`<tr><td>${r.ac}</td><td>${esc([...new Set(r.parts.map(p=>p.client||'（未指定）'))].join(' / '))}</td><td>${esc(r.code)}</td><td>${r.bs}</td><td class="r">${fmtN(r.sh)}</td><td class="r">${fmtN(r.gross)}</td>
+  $('#p-fix').innerHTML=rateBox()+`<p class="note">Trade Confirm 預設 ${BAD_BPS} bps 的成交依對到的通路修正；DMA 的單費率超過上限的，也改用 DMA 費率（設定在上方）。同一筆對到多個通路時，依各通路成交股數拆開計算。標示「待指定」的部分還沒有通路，暫時保留原手收。</p>
+  <div class="scroll"><table><thead><tr><th>帳號</th><th>原因</th><th>客戶</th><th>股票</th><th>B/S</th><th class="r">股數</th><th class="r">金額</th><th>拆分</th><th class="r">原手收</th><th class="r">修正後</th></tr></thead><tbody>
+  ${list.map(r=>`<tr><td>${r.ac}</td><td>${r.isBad?`預設 ${BAD_BPS} bps`:`DMA ${r.bps} bps 超過上限`}</td><td>${esc([...new Set(r.parts.map(p=>p.client||'（未指定）'))].join(' / '))}</td><td>${esc(r.code)}</td><td>${r.bs}</td><td class="r">${fmtN(r.sh)}</td><td class="r">${fmtN(r.gross)}</td>
    <td>${r.parts.map(p=>p.src?`${chip(p.src)}${fmtN(p.qty)}`:`<span class="pending">待指定 ${fmtN(p.qty)}</span>`).join(' ')}</td><td class="r">${fmtN(r.comm)}</td><td class="r ${r.pending?'pending':''}">${fmtN(r.commFixed)}</td></tr>`).join('')}
-  <tr class="total"><td colspan="7">合計 ${list.length} 筆</td><td class="r">${fmtN(b)}</td><td class="r">${fmtN(f)}</td></tr></tbody></table></div>`;
+  <tr class="total"><td colspan="8">合計 ${list.length} 筆</td><td class="r">${fmtN(b)}</td><td class="r">${fmtN(f)}</td></tr></tbody></table></div>`;
   bindRateBox();
 }
 
@@ -818,7 +834,7 @@ $('#export').addEventListener('click',()=>{
   if((state.extra||[]).length) XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(state.extra.map(x=>({客戶:x.client,成交值:x.gross,手收:x.comm,'DMA/Care':x.dc,備註:x.note||''}))),'人工輸入成交');
   const det=[];state.rows.forEach(r=>r.parts.forEach(p=>det.push({帳號:r.ac,FID:r.fid,帳戶名稱:r.name,股票:r.code,股名:r.stock,'B/S':r.bs,股數:p.qty,價格:r.px,金額:Math.round(p.gross),'原bps':r.bps,客戶:p.client||'',通路:p.src?SRC_LABEL[p.src]:'',歸戶方式:{direct:'帳號','direct+':'帳號（股數多於下單檔）',name:'名稱',exact:'股數配對',affinity:'同帳號',manual:'人工'}[p.how],原手收:Math.round(r.comm*p.qty/r.sh),修正後手收:Math.round(p.comm)})));
   XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(det),'明細');
-  const fx=state.rows.filter(r=>r.isBad).map(r=>({帳號:r.ac,帳戶名稱:r.name,股票:r.code,'B/S':r.bs,股數:r.sh,金額:r.gross,原手收:r.comm,修正後:r.commFixed,拆分:r.parts.map(p=>(p.src?SRC_LABEL[p.src]:'待指定')+' '+p.qty).join(' / ')}));
+  const fx=state.rows.filter(r=>r.isBad||r.dmaHigh).map(r=>({帳號:r.ac,帳戶名稱:r.name,股票:r.code,'B/S':r.bs,股數:r.sh,金額:r.gross,原手收:r.comm,修正後:r.commFixed,拆分:r.parts.map(p=>(p.src?SRC_LABEL[p.src]:'待指定')+' '+p.qty).join(' / ')}));
   XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(fx.length?fx:[{說明:'無'}]),'手收修正');
   const td=state.rows.filter(r=>r.unresolved).map(r=>({帳號:r.ac,帳戶名稱:r.name,股票:r.code,'B/S':r.bs,conf股數:r.sh,未歸戶股數:r.rem,bps:r.bps}));
   XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(td.length?td:[{說明:'全部已歸戶'}]),'待確認');
