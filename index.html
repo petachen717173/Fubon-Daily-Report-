@@ -934,10 +934,13 @@ function parseOverview(wb,year){
   raw.slice(1).forEach(r=>{ if(!r||!r[1]||!Number(r[0])) return; const m=Number(r[0]);
     detail.push([m,String(r[1]).trim(),String(r[2]??'').trim(),r[3]??null,num(r[4]),r[5]??null,num(r[6]),num(r[7]),r[8]??null,num(r[9]),r[10]??null,r[11]??null,r[12]??null,(r[16]!==null&&r[16]!==undefined&&String(r[16])!=='')?0:null]);
     prefixName[histName(r[1])]=prefixName[histName(r[1])]||String(r[1]).trim(); });
-  // 月工作表沒有資料的月份（例如當月），用底稿整理：Q 欄有值 = DMA
-  const dm={}; detail.forEach(d=>{ if(months[d[0]]) return; const k=d[0]+'|'+histName(d[1])+'|'+(d[13]===0?1:0);
+  // 以底稿為主：有底稿的月份一律用底稿整理（Q 欄有值 = DMA）；月工作表只用來補 Rebate，
+  // 以及底稿沒有的月份（例如只有業績包、沒有底稿時）
+  const dm={}; detail.forEach(d=>{ const k=d[0]+'|'+histName(d[1])+'|'+(d[13]===0?1:0);
     const o=dm[k]=dm[k]||{m:d[0],client:histName(d[1]),turn:0,comm:0,net:0,rebate:0,research:0,dma:d[13]===0}; o.turn+=d[4]; o.comm+=d[6]; o.net+=d[7]; o.research+=d[9]; });
-  Object.values(dm).forEach(o=>{ (months[o.m]=months[o.m]||[]).push({client:o.client,turn:o.turn,comm:o.comm,net:o.net,rebate:o.rebate,research:o.research,dma:o.dma}); });
+  const fromDg={}; Object.values(dm).forEach(o=>{ (fromDg[o.m]=fromDg[o.m]||[]).push({client:o.client,turn:o.turn,comm:o.comm,net:o.net,rebate:0,research:o.research,dma:o.dma}); });
+  Object.entries(fromDg).forEach(([m,rows])=>{ const sheet=months[m]||[]; const rb={}; sheet.forEach(r=>{ const k=r.client+'|'+(r.dma?1:0); rb[k]=(rb[k]||0)+(r.rebate||0); });
+    rows.forEach(r=>{ r.rebate=rb[r.client+'|'+(r.dma?1:0)]||0; }); months[m]=rows; });
   return {year,months,detail,prefixName};
 }
 
