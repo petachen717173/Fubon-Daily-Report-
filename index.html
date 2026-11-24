@@ -215,6 +215,21 @@ button.danger{color:var(--bad);border-color:var(--bad)}
 .rcgrid{display:flex;gap:16px;flex-wrap:wrap;font-size:13px;color:var(--mute)}
 .rcgrid label{display:flex;align-items:center;gap:6px}
 .rcgrid input{max-width:none;text-align:right}
+.ovbar input[type=text]{max-width:none}
+
+.modeseg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;margin-bottom:10px;background:var(--surface)}
+.seg{border:0;border-radius:0;padding:7px 18px;background:none;color:var(--mute);font-size:13.5px}
+.seg[aria-selected="true"]{background:var(--accent);color:#fff;font-weight:600}
+.ovdrop{position:relative;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;min-height:92px;padding:16px;background:var(--surface);border:1.5px dashed var(--line);border-radius:10px;cursor:pointer;text-align:center}
+.ovdrop:hover,.ovdrop.drag{border-color:var(--accent);background:var(--accent-soft)}
+.ovdrop b{font-size:15px}.ovdrop .fn{color:var(--mute);font-size:12.5px}
+.ovdrop input{position:absolute;inset:0;opacity:0;cursor:pointer}
+.ovhint{font-size:12px;color:var(--mute);margin:6px 2px 0;display:flex;align-items:center;gap:6px}
+.ovhint input{width:100px;max-width:none;font-size:12px;padding:3px 6px}
+.fourbar{margin:10px 0 0}
+.mainbar{margin-top:12px}
+.holi{display:flex;flex-direction:column;gap:3px;font-size:12.5px;color:var(--mute);margin:4px 0 8px}
+.holi textarea{font:12px/1.4 ui-monospace,monospace;border:1px solid var(--line);border-radius:5px;padding:6px;background:var(--surface);color:var(--ink);resize:vertical}
 </style>
 </head>
 <body>
@@ -226,15 +241,22 @@ button.danger{color:var(--bad);border-color:var(--bad)}
 <div class="warn" id="saveWhy" hidden></div>
 
 
+<div class="modeseg" role="tablist"><button class="seg" data-m="ov" role="tab">業績總覽</button><button class="seg" data-m="four" role="tab">四個檔案</button></div>
+<div class="modepane" id="mode-ov">
+  <label class="ovdrop" id="ovDrop"><b>拖入或選擇業績總覽</b><span class="fn" id="ovFn">底稿 Date 欄有日期的列，會各自建立成一天的報表</span><input type="file" id="ovDayFile" accept=".xlsx,.xlsm,.xls"></label>
+  <div class="ovhint">Date 欄只有月份時，這次匯入算作：<input type="text" id="ovDay"><input type="checkbox" id="ovOverwrite" checked hidden></div>
+</div>
+<div class="modepane" id="mode-four" hidden>
 <div class="slots">
   <label class="slot" id="s-conf"><b>Trade Confirm</b><span class="fn">Trade_Conf_MMDD.xls</span><input type="file" accept=".xls,.xlsx" data-k="conf"></label>
   <label class="slot" id="s-lt"><b>DMA 下單檔</b><span class="fn">MMDD_LT.xlsx</span><input type="file" accept=".xls,.xlsx" data-k="lt"></label>
   <label class="slot" id="s-ht"><b>FOMS 下單檔</b><span class="fn">MMDD_HT.xlsx</span><input type="file" accept=".xls,.xlsx" data-k="ht"></label>
   <label class="slot" id="s-xp"><b>K Way<span class="opt">選填</span></b><span class="fn">xpats_MMDD.xls</span><input type="file" accept=".xls,.xlsx" data-k="xp"></label>
 </div>
-<div class="bar">
-  <button class="primary" id="run" disabled>開始比對</button>
-  <span class="msg" id="msg">先放入 Trade Confirm、DMA、FOMS 三個檔案。</span>
+  <div class="bar fourbar"><button class="primary" id="run" disabled>開始比對</button></div>
+</div>
+<div class="bar mainbar">
+  <span class="msg" id="msg"></span>
   <span class="xfer"><button id="ovExport">匯出業績總覽</button><button id="shareExport">匯出</button><label class="btn">匯入<input type="file" id="shareImport" accept=".json,.gz" hidden></label><input type="file" id="bkImportTop" accept=".json,.gz" hidden></span>
 </div>
 
@@ -470,7 +492,7 @@ function finalize(rows, manual, alias) {
   rows.forEach(r => {
     // 零股金額小，四捨五入後 bps 會變成 14.19、14.01 之類：用「手續費 ≈ 金額 × 預設費率」判斷
     r.dmaHigh = false;
-    r.isBad = Math.abs(r.bps - BAD_BPS) < 0.05 || (r.gross > 0 && Math.abs(r.comm - r.gross * BAD_BPS / 1e4) <= 1);
+    r.isBad = !r.final && (Math.abs(r.bps - BAD_BPS) < 0.05 || (r.gross > 0 && Math.abs(r.comm - r.gross * BAD_BPS / 1e4) <= 1));
     const m = manual[r.id];
     r.parts = r.allocs.map(a => ({ ...a }));
     if (r.rem > 0) r.parts.push({ party: m && m.party ? m.party : null, src: m && m.src ? m.src : null, qty: r.rem, how: 'manual', tags: '' });
@@ -482,7 +504,7 @@ function finalize(rows, manual, alias) {
         if (p.src && RATE[p.src]) p.comm = Math.round(p.gross * RATE[p.src]);
         else if (p.src) p.comm = r.comm * p.qty / r.sh;
         else { p.comm = r.comm * p.qty / r.sh; pending = true; }
-      } else if (p.src === 'LT' && DMA_CAP != null && RATE.LT && r.bps > DMA_CAP + 0.005) {
+      } else if (!r.final && p.src === 'LT' && DMA_CAP != null && RATE.LT && r.bps > DMA_CAP + 0.005) {
         p.comm = Math.round(p.gross * RATE.LT); p.dmaHigh = true; r.dmaHigh = true;
       } else p.comm = r.comm * p.qty / r.sh;
       fixed += p.comm;
@@ -527,7 +549,7 @@ async function saveFile(filename,blob,sayEl){
 }
 
 const files={}; const wbs={};
-const BIGKEY=/^(days$|mktHist$|hist$|mkt:|brk:|mkfetch:)/;   // 會越存越多的資料：放 IndexedDB（空間大），不放 localStorage（只有 5 MB 且同網域共用）
+const BIGKEY=/^(days$|mktHist$|hist$|ovPrev$|mkt:|brk:|mkfetch:)/;   // 會越存越多的資料：放 IndexedDB（空間大），不放 localStorage（只有 5 MB 且同網域共用）
 const store={
   mem:{}, pend:{},
   get(k,d){ if(k in store.mem) return store.mem[k]; try{const v=localStorage.getItem('perfrpt:'+k);return v?JSON.parse(v):d}catch(e){return d} },
@@ -550,7 +572,7 @@ async function kvLoad(){
   Object.entries(store.pend).forEach(([k,v])=>kvPut(k,v)); store.pend={};
 }
 // ===== 新版本第一次開啟：清除舊資料（每台電腦只會做一次）=====
-const RESET_VER='R2026-10-28'; window.__wipeIDB=false;
+const RESET_VER='R2026-11-24'; window.__wipeIDB=false;
 (function(){ try{
   if(localStorage.getItem('perfrpt-reset')===RESET_VER) return;
   const keys=[]; for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i); if(k.startsWith('perfrpt:')) keys.push(k);}
@@ -647,7 +669,7 @@ function renderLedger(){
   const t=totals();
   $('#ledger').innerHTML=`
    <div class="cell"><div class="k">成交值（億）</div><div class="v">${fmtE(t.gross)}</div></div>
-   <div class="cell"><div class="k">手收（修正前 → 修正後）</div><div class="v"><span class="strike">${fmtN(t.c0)}</span>${fmtN(t.c1)}</div></div>
+   ${state.rows.length&&state.rows.every(r=>r.final)?`<div class="cell"><div class="k">當日手收（業績總覽 comm）</div><div class="v">${fmtN(t.c1)}</div></div>`:`<div class="cell"><div class="k">手收（修正前 → 修正後）</div><div class="v"><span class="strike">${fmtN(t.c0)}</span>${fmtN(t.c1)}</div></div>`}
    <div class="cell"><div class="k">DMA 占比</div><div class="v">${(t.lt/t.gross*100).toFixed(2)}<small>%</small></div></div>
    <div class="cell ${t.todo?'alert':'clear'}"><div class="k">待人工確認</div><div class="v">${t.todo}<small> 筆</small></div></div>`;
   const tab=document.querySelector('.tab[data-p="todo"]');
@@ -769,7 +791,7 @@ function renderDetail(){
   <div class="scroll"><table><thead><tr><th>帳號</th><th>帳戶名稱</th><th>股票</th><th>B/S</th><th class="r">股數</th><th class="r">價格</th><th class="r">金額</th><th class="r">bps</th><th>歸戶</th><th>方式</th><th class="r">手收</th></tr></thead><tbody>
   ${list.map(r=>`<tr><td>${r.ac}</td><td>${esc(r.name.slice(0,30))}</td><td>${esc(r.code)}</td><td>${r.bs}</td><td class="r">${fmtN(r.sh)}</td><td class="r">${r.px}</td><td class="r">${fmtN(r.gross)}</td><td class="r ${r.isBad?'bad':''}">${r.bps}</td>
    <td>${r.parts.map(p=>`${p.src?chip(p.src):''}${p.client?esc(p.client):'<span class="pending">未指定</span>'}${r.parts.length>1?' '+fmtN(p.qty):''}`).join('<br>')}</td>
-   <td>${[...new Set(r.parts.map(p=>({direct:'帳號','direct+':'帳號（股數多於下單檔）',name:'名稱',exact:'股數配對',affinity:'同帳號',manual:'人工'}[p.how])))].join('、')}</td><td class="r">${fmtN(r.commFixed)}</td></tr>`).join('')}
+   <td>${[...new Set(r.parts.map(p=>({overview:'業績總覽',direct:'帳號','direct+':'帳號（股數多於下單檔）',name:'名稱',exact:'股數配對',affinity:'同帳號',manual:'人工'}[p.how])))].join('、')}</td><td class="r">${fmtN(r.commFixed)}</td></tr>`).join('')}
   </tbody></table></div>`;
   const dq=$('#dq'); dq.addEventListener('input',()=>{detailQ=dq.value;const pos=dq.selectionStart;renderDetail();const n=$('#dq');n.focus();n.setSelectionRange(pos,pos);});
 }
@@ -832,7 +854,7 @@ $('#export').addEventListener('click',()=>{
   XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(rk),'本日排名');
   XLSX.utils.book_append_sheet(wb,rebateSheet(),'Rebate');
   if((state.extra||[]).length) XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(state.extra.map(x=>({客戶:x.client,成交值:x.gross,手收:x.comm,'DMA/Care':x.dc,備註:x.note||''}))),'人工輸入成交');
-  const det=[];state.rows.forEach(r=>r.parts.forEach(p=>det.push({帳號:r.ac,FID:r.fid,帳戶名稱:r.name,股票:r.code,股名:r.stock,'B/S':r.bs,股數:p.qty,價格:r.px,金額:Math.round(p.gross),'原bps':r.bps,客戶:p.client||'',通路:p.src?SRC_LABEL[p.src]:'',歸戶方式:{direct:'帳號','direct+':'帳號（股數多於下單檔）',name:'名稱',exact:'股數配對',affinity:'同帳號',manual:'人工'}[p.how],原手收:Math.round(r.comm*p.qty/r.sh),修正後手收:Math.round(p.comm)})));
+  const det=[];state.rows.forEach(r=>r.parts.forEach(p=>det.push({帳號:r.ac,FID:r.fid,帳戶名稱:r.name,股票:r.code,股名:r.stock,'B/S':r.bs,股數:p.qty,價格:r.px,金額:Math.round(p.gross),'原bps':r.bps,客戶:p.client||'',通路:p.src?SRC_LABEL[p.src]:'',歸戶方式:{overview:'業績總覽',direct:'帳號','direct+':'帳號（股數多於下單檔）',name:'名稱',exact:'股數配對',affinity:'同帳號',manual:'人工'}[p.how],原手收:Math.round(r.comm*p.qty/r.sh),修正後手收:Math.round(p.comm)})));
   XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(det),'明細');
   const fx=state.rows.filter(r=>r.isBad||r.dmaHigh).map(r=>({帳號:r.ac,帳戶名稱:r.name,股票:r.code,'B/S':r.bs,股數:r.sh,金額:r.gross,原手收:r.comm,修正後:r.commFixed,拆分:r.parts.map(p=>(p.src?SRC_LABEL[p.src]:'待指定')+' '+p.qty).join(' / ')}));
   XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(fx.length?fx:[{說明:'無'}]),'手收修正');
@@ -841,6 +863,7 @@ $('#export').addEventListener('click',()=>{
   const out=XLSX.write(wb,{bookType:'xlsx',type:'array'}); saveFile(`業績日報_${(state.date||'').replace(/\//g,'')}.xlsx`,new Blob([out]));
 });
 // ===== 報表（業務達成情況）=====
+let exchFeeRate=store.get('exchFeeRate',0.0000665);
 let targets=store.get('targets',{share:37,fini:111,turnD:39.14,commD:1910223});
 let base=store.get('base',{date:'',mtdDays:0,ytdDays:0,mtd:{},ytd:{}});
 const FIELDS=[['turn','本公司成交值（元）'],['comm','Gross commission'],['exch','Exchange fee'],['rebate','Rebate'],['mkt','市場成交值'],['fb','FINI 買進'],['fs','FINI 賣出'],['dma','DMA 成交值']];
@@ -850,7 +873,8 @@ function todayInput(){return store.get(mktKey(),{fb:null,fs:null,mkt:null,exch:n
 function todayVals(){
   const t=totals(); const m=todayInput();
   const dma=t.lt;
-  return {turn:t.gross+(m.adjTurn||0)*1e8, comm:t.c1+(m.adjComm||0), exch:m.exch, rebate:rebateToday(), mkt:m.mkt, fb:m.fb, fs:m.fs, dma};
+  const turn=t.gross+(m.adjTurn||0)*1e8;
+  return {turn, comm:t.c1+(m.adjComm||0), exch:(m.exch!==null&&m.exch!==undefined)?m.exch:(exchFeeRate!=null?Math.round(turn*exchFeeRate):null), rebate:rebateToday(), mkt:m.mkt, fb:m.fb, fs:m.fs, dma};
 }
 // ===== 匯入「市場狀況」Excel（巨集抓的每日市場資料）=====
 let mktHist=store.get('mktHist',{}); // 'YYYY/MM/DD' -> {mkt,fb,fs}
@@ -919,7 +943,7 @@ function histNames(){ if(!hist) return []; if(histIndex) return histIndex.names;
 // 工具裡的客戶名稱 → 報表名稱：對照表優先，其次自動比對歷史資料的名稱
 function canon(n){ if(!n) return n; if(alias[n]) return alias[n]; if(hist){ histNames(); const h=histIndex.byKey[nkey(n)]; if(h) return h; } return n; }
 
-function parseOverview(wb,year){
+function parseOverview(wb,year,cutoff){
   const num=v=>{const x=Number(String(v??'').replace(/,/g,'')); return isFinite(x)?x:0;};
   const months={};
   MONTH_ZH.forEach((zh,i)=>{ const ws=wb.Sheets[zh]; if(!ws) return;
@@ -931,7 +955,7 @@ function parseOverview(wb,year){
   const ds=wb.Sheets['底稿']; if(!ds&&!Object.keys(months).length) throw new Error('找不到月份工作表或「底稿」，請確認是業績總覽檔案。');
   const raw=ds?XLSX.utils.sheet_to_json(ds,{header:1,raw:true,defval:null}):[];
   const detail=[]; const prefixName={};
-  raw.slice(1).forEach(r=>{ if(!r||!r[1]||!Number(r[0])) return; const m=Number(r[0]);
+  raw.slice(1).forEach(r=>{ if(!r||!r[1]) return; const dk=dgDateKey(r[0]); if(!dk) return; if(dk.d&&cutoff&&dk.d>cutoff) return; const m=dk.m;
     detail.push([m,String(r[1]).trim(),String(r[2]??'').trim(),r[3]??null,num(r[4]),r[5]??null,num(r[6]),num(r[7]),r[8]??null,num(r[9]),r[10]??null,r[11]??null,r[12]??null,(r[16]!==null&&r[16]!==undefined&&String(r[16])!=='')?0:null]);
     prefixName[histName(r[1])]=prefixName[histName(r[1])]||String(r[1]).trim(); });
   // 以底稿為主：有底稿的月份一律用底稿整理（Q 欄有值 = DMA）；月工作表只用來補 Rebate，
@@ -955,31 +979,31 @@ function applyHistBase(){
   if(!yd.includes(c)) yd.push(c); if(!md.includes(c)&&c.slice(0,7)===c.slice(0,7)) md.push(c);
   const daysOK=yd.length>1&&yd.slice().sort()[0].slice(5)<='01/07';
   base.date=c;
-  base.ytd=Object.assign({},base.ytd||{},{turn:Y.turn,comm:Y.comm,dma:Y.dma,exch:null,rebate:null});
-  base.mtd=Object.assign({},base.mtd||{},{turn:M.turn,comm:M.comm,dma:M.dma,exch:null,rebate:null});
+  base.ytd=Object.assign({},base.ytd||{},{turn:Y.turn,comm:Y.comm,dma:Y.dma,exch:exchFeeRate!=null?Math.round(Y.turn*exchFeeRate):null,rebate:null});
+  base.mtd=Object.assign({},base.mtd||{},{turn:M.turn,comm:M.comm,dma:M.dma,exch:exchFeeRate!=null?Math.round(M.turn*exchFeeRate):null,rebate:null});
   if(daysOK){ base.ytdDays=yd.length; base.mtdDays=md.length; }
   store.set('base',base);
   return {daysOK,ytdDays:yd.length,mtdDays:md.length};
 }
 function defCutoff(){ const t=new Date(); t.setDate(t.getDate()-1); while(t.getDay()===0||t.getDay()===6) t.setDate(t.getDate()-1);
   return `${t.getFullYear()}/${String(t.getMonth()+1).padStart(2,'0')}/${String(t.getDate()).padStart(2,'0')}`; }
-async function importOverview(file){
+async function importOverview(file,cutoffOverride){
   const say=(m,err)=>{ window.__histSay={m,err}; const el=$('#histMsg')||$('#msg'); el.className=err?'msg err':'msg'; el.innerHTML=m; };
   try{
     const wb=XLSX.read(await file.arrayBuffer(),{type:'array'});
     const y=Number((file.name.match(/20\d\d/)||[])[0])||Number((state&&state.date||'').slice(0,4))||new Date().getFullYear();
-    const el=$('#ovCut'); const ans=(el&&el.value.trim())||defCutoff();
+    const el=$('#ovCut'); const ans=cutoffOverride||(el&&el.value.trim())||defCutoff();
     say('讀取中…');
     const cutoff=normDate(ans); if(!/^\d{4}\/\d{2}\/\d{2}$/.test(cutoff)) throw new Error('日期格式不對：'+ans);
-    const h=parseOverview(wb,y); h.cutoff=cutoff; h.year=Number(cutoff.slice(0,4)); h.importedAt=new Date().toISOString(); h.file=file.name;
-    hist=h; histIndex=null; store.set('hist',hist);
+    const h=parseOverview(wb,y,cutoff); h.cutoff=cutoff; h.year=Number(cutoff.slice(0,4)); h.importedAt=new Date().toISOString(); h.file=file.name;
+    hist=h; histIndex=null; store.set('hist',hist); store.set('ovPrev',null);
     // 單一客戶的帳號 → 加進對照表（已經設定過的不動）
     const accs={}; h.detail.forEach(d=>{ const a=String(d[2]).replace(/\D/g,''); if(a.length!==7) return; (accs[a]=accs[a]||new Set()).add(histName(d[1])); });
     let added=0; Object.entries(accs).forEach(([a,set])=>{ if(set.size===1&&!savedMap[a]&&![...set][0].includes('綜合')){ savedMap[a]={party:[...set][0],src:null}; added++; } });
     store.set('acmap',savedMap);
     const tot=Object.values(h.months).flat().reduce((a,r)=>a+r.turn,0);
     const bd=applyHistBase();
-    say(`<span class="okc">✓ 已匯入業績總覽</span>：${Object.keys(h.months).length} 個月、合計 ${fmtE(tot)} 億，截至 ${cutoff}；對照表新增 ${added} 個帳號。期初累計已改成截至 ${cutoff}，自動帶入成交值、手收、DMA 成交值${bd&&bd.daysOK?`和交易日數（MTD ${bd.mtdDays}、YTD ${bd.ytdDays} 天）`:'（交易日數請手動填，因為市場狀況 Excel 沒有從年初開始）'}；<b>請到報表下方期初累計補填 ${cutoff} 的 Exchange fee 和 Rebate</b>。`);
+    say(`<span class="okc">✓ 已匯入業績總覽</span>：${Object.keys(h.months).length} 個月、合計 ${fmtE(tot)} 億，截至 ${cutoff}；對照表新增 ${added} 個帳號。期初累計已改成截至 ${cutoff}，自動帶入成交值、手收、DMA 成交值、Exchange fee${bd&&bd.daysOK?`和交易日數（MTD ${bd.mtdDays}、YTD ${bd.ytdDays} 天）`:'（交易日數請手動填，因為市場狀況 Excel 沒有從年初開始）'}；<b>請到報表下方期初累計補填 ${cutoff} 的 Rebate</b>。`);
     if(state) recompute();
   }catch(e){ say('匯入失敗：'+esc(e.message),1); }
 }
@@ -1064,6 +1088,15 @@ async function exportOverview(){
   say(`已匯出 ${year}總覽.xlsx${cutoff?`（${cutoff} 以前用匯入的總覽，之後 ${snaps.length} 天用工具資料）`:`（${snaps.length} 天工具資料）`}。`);
 }
 
+
+// ===== 台股交易日：平日扣掉休市日（2026 證交所公告，可在目標值區修改）=====
+const HOLIDAYS_DEFAULT='2026/01/01, 2026/02/12, 2026/02/13, 2026/02/16, 2026/02/17, 2026/02/18, 2026/02/19, 2026/02/20, 2026/02/27, 2026/04/03, 2026/04/06, 2026/05/01, 2026/06/19, 2026/09/25, 2026/09/28, 2026/10/09, 2026/10/26, 2026/12/25';
+let holidays=store.get('holidays',HOLIDAYS_DEFAULT);
+const holiSet=()=>new Set(String(holidays||'').split(/[,，\s]+/).map(normDate).filter(x=>/^\d{4}\/\d{2}\/\d{2}$/.test(x)));
+function tradingDays(scope,d){ // 從月初／年初到 d（含）的交易日數
+  const [y,m,dd]=d.split('/').map(Number); const t=new Date(y,scope==='mtd'?m-1:0,1), e=new Date(y,m-1,dd); const H=holiSet(); let n=0;
+  for(;t<=e;t.setDate(t.getDate()+1)){ if(t.getDay()%6===0) continue; const k=`${t.getFullYear()}/${String(t.getMonth()+1).padStart(2,'0')}/${String(t.getDate()).padStart(2,'0')}`; if(!H.has(k)) n++; }
+  return n; }
 function cumulate(scope){ // scope 'mtd' | 'ytd'
   const d=state.date, ym=d.slice(0,7), y=d.slice(0,4);
   const inScope=x=>scope==='mtd'?x.slice(0,7)===ym:x.slice(0,4)===y;
@@ -1072,7 +1105,7 @@ function cumulate(scope){ // scope 'mtd' | 'ytd'
   if(bd&&bd===d){ // 期初累計就截至今天（例如業績總覽截至今天）：直接用期初，不再加今天
     const b=base[scope]||{}; FIELDS.forEach(([k])=>{const v=pn(b[k]); if(v===null)missing.add(k); else sum[k]=v;}); days=Number(base[scope+'Days'])||1;
     const hs0=histSum(scope,d); if(hs0){ ['mkt','fb','fs'].forEach(k=>{sum[k]=hs0[k]; missing.delete(k);}); }
-    return {sum,days,missing,valid:true,hist:!!hs0};
+    return {sum,days:tradingDays(scope,d),missing,valid:true,hist:!!hs0};
   }
   const useBase=bd&&bd<d&&inScope(bd);
   if(useBase){ const b=base[scope]||{}; FIELDS.forEach(([k])=>{const v=pn(b[k]); if(v===null)missing.add(k); else sum[k]+=v;}); days+=Number(base[scope+'Days'])||0; }
@@ -1091,7 +1124,7 @@ function cumulate(scope){ // scope 'mtd' | 'ytd'
   }
   if(!valid) FIELDS.forEach(([k])=>missing.add(k));
   const hs=histSum(scope,d); if(hs){ ['mkt','fb','fs'].forEach(k=>{sum[k]=hs[k]; missing.delete(k);}); }
-  return {sum,days,missing,valid,hist:!!hs};
+  return {sum,days:tradingDays(scope,d),missing,valid,hist:!!hs};
 }
 function kpis(v,days,missing){
   const has=(...ks)=>ks.every(k=>!missing.has(k)&&v[k]!==null&&v[k]!==undefined);
@@ -1171,25 +1204,28 @@ function renderInputs(R){
   $('#reportInputs').innerHTML=`
   <details open><summary>本日市場資料與費用（${state.date}，依日期記住）</summary><div class="mkimp"><label class="btn">匯入市場狀況 Excel<input type="file" id="mkBook" accept=".xlsm,.xlsx,.xls" hidden></label><span class="msg" id="mkBookMsg">${Object.keys(mktHist).length?`已有 ${Object.keys(mktHist).length} 天市場資料（到 ${Object.keys(mktHist).sort().pop()}）`:''}</span></div><div class="grid">
     <label>FINI 買進（元）${inp('m.fb',m.fb)}</label><label>FINI 賣出（元）${inp('m.fs',m.fs)}</label><label>市場成交值（元）${inp('m.mkt',m.mkt)}</label>
-    <label>Exchange fee${inp('m.exch',m.exch)}</label><label>Rebate 手動覆寫（留空＝依規則）${inp('m.rebate',m.rebate,f0(calcRebate().total))}</label><span></span>
+    <label>Exchange fee 手動覆寫（留空＝成交值 × 費率）${inp('m.exch',m.exch,exchFeeRate!=null?f0(Math.round((totals().gross+(m.adjTurn||0)*1e8)*exchFeeRate)):'')}</label><label>Exchange fee 費率（%）<input type="text" class="num" data-f="r.exch" value="${exchFeeRate!=null?+(exchFeeRate*100).toPrecision(6):''}" placeholder="0.00665"></label><label>Rebate 手動覆寫（留空＝依規則）${inp('m.rebate',m.rebate,f0(calcRebate().total))}</label><span></span>
     <label>其他成交值調整（億）${inp('m.adjTurn',m.adjTurn,'0')}</label><label>其他手收調整${inp('m.adjComm',m.adjComm,'0')}</label>
   </div><p class="note">調整欄位給 conf 以外的成交用（例如鉅額）。本日成交值 = 工具算出 ${f2(totals().gross/1e8)} 億 + 調整；手收 = 修正後 ${f0(totals().c1)} + 調整。</p></details>
   <details><summary>目標值</summary><div class="grid">
     <label>市佔率目標（bps）${inp('t.share',targets.share)}</label><label>FINI 市佔率目標（bps）${inp('t.fini',targets.fini)}</label><span></span>
     <label>每日交易值目標（億）${inp('t.turnD',targets.turnD)}</label><label>每日手收目標${inp('t.commD',targets.commD)}</label><label>每億手收目標（自動）<input type="text" disabled value="${targets.turnD?f0(targets.commD/targets.turnD):''}"></label>
-  </div></details>
+  </div>
+  <label class="holi">休市日（平日扣掉這些日期就是交易日；颱風假等臨時休市請加在這裡）<textarea data-f="h.list" rows="2">${esc(holidays)}</textarea></label></details>
   <details ${missM.length||missY.length?'open':''}><summary>期初累計${missM.length||missY.length?'<span class="pending"> ・ MTD / YTD 有欄位缺資料</span>':''}</summary>
   ${hist?`<div class="mkimp"><button id="histBase">用業績總覽帶入（截至 ${hist.cutoff}）</button><span class="msg">Exchange fee、Rebate 需要手動填</span></div>`:''}
   <div class="grid"><label>累計截止日（YYYY/MM/DD）<input type="text" class="num" data-f="b.date" value="${esc(base.date)}" placeholder="2026/10/20"></label>
-    <label>MTD 已累計交易日數${inp('b.mtdDays',base.mtdDays)}</label><label>YTD 已累計交易日數${inp('b.ytdDays',base.ytdDays)}</label></div>
+    <label>MTD 交易日數（自動）<input type="text" disabled value="${state?tradingDays('mtd',state.date):''}"></label><label>YTD 交易日數（自動）<input type="text" disabled value="${state?tradingDays('ytd',state.date):''}"></label></div>
   <div class="scroll" style="margin-top:8px"><table class="btab"><thead><tr><th>項目</th><th>MTD 累計</th><th>YTD 累計</th></tr></thead><tbody>
    ${FIELDS.map(([k,n])=>`<tr><td>${n}${missM.includes(k)||missY.includes(k)?' <span class="pending">缺</span>':''}</td><td>${inp('b.mtd.'+k,base.mtd[k])}</td><td>${inp('b.ytd.'+k,base.ytd[k])}</td></tr>`).join('')}
   </tbody></table></div></details>`;
+  {const ht=$('#reportInputs').querySelector('textarea[data-f="h.list"]'); if(ht) ht.addEventListener('change',()=>{ holidays=ht.value; store.set('holidays',holidays); const open=[...$('#reportInputs').querySelectorAll('details')].map(x=>x.open); renderReport(); [...$('#reportInputs').querySelectorAll('details')].forEach((x,j)=>x.open=open[j]); persist(); });}
   {const hb=$('#histBase'); if(hb) hb.addEventListener('click',()=>{ applyHistBase(); const open=[...$('#reportInputs').querySelectorAll('details')].map(x=>x.open); renderReport(); [...$('#reportInputs').querySelectorAll('details')].forEach((x,j)=>x.open=open[j]); persist(); });}
   {const mb=$('#mkBook'); if(mb) mb.addEventListener('change',e=>{const f=e.target.files[0]; e.target.value=''; if(!f)return; importMarketBook(f,m=>{ const open=[...$('#reportInputs').querySelectorAll('details')].map(x=>x.open); renderReport(); [...$('#reportInputs').querySelectorAll('details')].forEach((x,j)=>x.open=open[j]); $('#mkBookMsg').innerHTML=m; });});}
   $('#reportInputs').querySelectorAll('input[data-f]').forEach(i=>i.addEventListener('change',()=>{
     const f=i.dataset.f.split('.'); const raw=i.value.trim();
     if(f[0]==='m'){const m=todayInput(); m[f[1]]=pn(raw); if(f[1].startsWith('adj')&&m[f[1]]===null)m[f[1]]=0; store.set(mktKey(),m); persist();}
+    else if(f[0]==='r'){const v=pn(raw); exchFeeRate=v===null?null:v/100; store.set('exchFeeRate',exchFeeRate);}
     else if(f[0]==='t'){const v=pn(raw); if(v!==null){targets[f[1]]=v; store.set('targets',targets);}}
     else if(f[0]==='b'){ if(f[1]==='date') base.date=normDate(raw); else if(f.length===2) base[f[1]]=pn(raw)||0; else {base[f[1]]=base[f[1]]||{}; base[f[1]][f[2]]=pn(raw);} store.set('base',base);}
     const open=[...$('#reportInputs').querySelectorAll('details')].map(x=>x.open);
@@ -1220,7 +1256,7 @@ const uid=()=>Math.random().toString(36).slice(2,9);
 const T=(cond,bps,ch,act,val)=>({id:uid(),cond,bps,ch,act,val});
 const DEFAULT_RULES=[
  {id:uid(),on:true,name:'JPM（JIL algo）',note:'針對透過JIL ALGO下的單，扣除經手費及Research Fee後跟JIL各分一半',acs:'',clients:'JP Morgan',tags:'',ch:'LT',type:'rule',exch:true,csa:0,research:0,tiers:[T('any',0,'any','split',0.5)]},
- {id:uid(),on:true,name:'JIL',note:'扣除經手費及CSA後各半',excl:'9918000',acs:'',clients:'',tags:'JEFFATP, OTA, 9918000',ch:'any',type:'rule',exch:true,csa:0,research:0,tiers:[T('any',0,'any','split',0.5)]},
+ {id:uid(),on:true,name:'JIL',note:'扣除經手費及CSA後各半',excl:'9918000',acs:'',clients:'',tags:'JEFFATP, OTA, 9918000, (J)',ch:'any',type:'rule',exch:true,csa:0,research:0,tiers:[T('any',0,'any','split',0.5)]},
  {id:uid(),on:true,name:'Sanford Bernstein',note:'扣除經手費及CSA後FB留1/3其餘退，但若COMM低於3.5bps，FB留1.5bps其餘退',acs:'',clients:'Sanford Bernstein',tags:'',ch:'any',type:'rule',exch:true,csa:0,research:0,tiers:[T('lt',3.5,'any','keep',1.5),T('any',0,'any','split',1/3)]},
  {id:uid(),on:true,name:'Core Pacific',note:'扣除經手費後DMA單留3bps／CARE單留5bps，其餘退',excl:'9933360',acs:'',clients:'Core Pacific',tags:'',ch:'any',type:'rule',exch:true,csa:0,research:0,tiers:[T('any',0,'LT','keep',3),T('any',0,'HT','keep',5)]},
  {id:uid(),on:true,name:'Outset Global',note:'目前13bps我們留8bps退5bps',acs:'',clients:'Outset',tags:'',ch:'any',type:'rule',exch:false,csa:0,research:0,tiers:[T('any',0,'any','keep',8)]},
@@ -1230,7 +1266,7 @@ const DEFAULT_RULES=[
  {id:uid(),on:true,name:'Cabrera',note:'Confirmation有預設Rebate，照上面的金額',acs:'',clients:'Cabrera',tags:'',ch:'any',type:'manual',exch:false,csa:0,research:0,tiers:[]},
  {id:uid(),on:true,name:'UOB SG',note:'我們留6bps其餘退',acs:'9975519',clients:'',tags:'',ch:'any',type:'rule',exch:false,csa:0,research:0,tiers:[T('any',0,'any','keep',6)]},
  {id:uid(),on:true,name:'MMA',note:'Confirmation有預設Rebate，照上面的金額，系統會自動退',acs:'',clients:'MMA',tags:'',ch:'any',type:'manual',exch:false,csa:0,research:0,tiers:[]},
- {id:uid(),on:true,name:'Point72（內法單）',note:'交易指示若顯示是內法的單，20bps手續費我們留3bps其餘退給內法',acs:'',clients:'Point72',tags:'Ally',ch:'any',type:'rule',exch:false,csa:0,research:0,tiers:[T('any',0,'any','keep',3)]},
+ {id:uid(),on:true,name:'Point72（內法單）',note:'交易指示若顯示是內法的單，20bps手續費我們留3bps其餘退給內法',acs:'',clients:'Point72',tags:'Ally, (內)',ch:'any',type:'rule',exch:false,csa:0,research:0,tiers:[T('any',0,'any','keep',3)]},
 ];
 let rules=store.get('rebateRules',null)||JSON.parse(JSON.stringify(DEFAULT_RULES));
 (function migrate(){if(!store.get('rebateRules',null))return;const d={'JIL':'9918000','Mizuho':'9970996','Core Pacific':'9933360'};let ch=false;
@@ -1238,6 +1274,9 @@ let rules=store.get('rebateRules',null)||JSON.parse(JSON.stringify(DEFAULT_RULES
 let exchRate=store.get('exchRate',0.4345);
 const saveRules=()=>store.set('rebateRules',rules);
 const list=s=>String(s||'').split(/[,，\n]/).map(x=>x.trim()).filter(Boolean);
+(function migrate2(){ const st=store.get('rebateRules',null); if(!st) return; let ch=false;
+ rules.forEach(R=>{ const tg=list(R.tags); if(R.name==='JIL'&&tg.length&&!tg.includes('(J)')){R.tags=R.tags+', (J)';ch=true;}
+   if(/^Point72/.test(R.name)&&tg.includes('Ally')&&!tg.includes('(內)')){R.tags=R.tags+', (內)';ch=true;} }); if(ch) store.set('rebateRules',rules); })();
 const CONDS={any:'任何手收',lt:'手收 <',le:'手收 ≤',eq:'手收 =',ge:'手收 ≥',gt:'手收 >'};
 const CHS={any:'任何通路',LT:'DMA',HT:'FOMS（Care）',XP:'K Way',NU:'NuOMS'};
 
@@ -1384,7 +1423,7 @@ let snapKeys=[]; let loading=false; let saveTimer=null;
 const rowKey=r=>[r.ac,r.code,r.bs,r.sh,r.px].join('|');
 function makeSnap(){
   return {date:state.date,savedAt:new Date().toISOString(),files:state.files||{},parties:state.parties||[],
-    rows:state.rows.map(r=>({id:r.id,sheet:r.sheet,ac:r.ac,fid:r.fid,name:r.name,code:r.code,sym:r.sym,stock:r.stock,bs:r.bs,sh:r.sh,px:r.px,gross:r.gross,comm:r.comm,totc:r.totc,bps:r.bps,rem:r.rem,allocs:r.allocs})),
+    rows:state.rows.map(r=>({id:r.id,sheet:r.sheet,ac:r.ac,fid:r.fid,name:r.name,code:r.code,sym:r.sym,stock:r.stock,bs:r.bs,sh:r.sh,px:r.px,gross:r.gross,comm:r.comm,totc:r.totc,bps:r.bps,rem:r.rem,final:r.final||undefined,allocs:r.allocs})),
     assoc:Object.fromEntries(Object.entries(state.assoc||{}).map(([k,v])=>[k,[...v]])),
     leftovers:(state.leftovers||[]).map(e=>({key:e.key,party:e.party,sym:e.sym,bs:e.bs,src:e.src,rem:e.rem})),
     manual,extra:state.extra||[]};
@@ -1442,7 +1481,7 @@ async function recalcAll(){
   const cur=state&&state.date; let n=0;
   const snaps=await IDB.all(); loading=true;
   for(const s of snaps.sort((a,b)=>a.date<b.date?-1:1)){
-    applySnap(s); state.clients=finalize(state.rows,manual,alias);
+    applySnap(s); state.clients=mergeExtra(finalize(state.rows,manual,alias));
     const days=db(); days[s.date]=daySummary(); store.set('days',days); n++;
   }
   loading=false; if(cur) await loadDay(cur);
@@ -1455,7 +1494,7 @@ function renderDB(){
   <div class="toolbar"><button id="bkExport">完整備份（匯出）</button><label class="btn">還原備份<input type="file" id="bkImport" accept=".json,.gz" hidden></label>
    <button id="recalcAll">用目前規則重算所有日期</button><span class="ovbox">業績總覽截止日 <input type="text" id="ovCut" value="${esc(hist?hist.cutoff:defCutoff())}" style="width:110px"><label class="btn">匯入業績總覽（歷史資料）<input type="file" id="ovImport" accept=".xlsx,.xlsm,.xls" hidden></label></span><button id="wipeAll" class="danger">清除所有資料</button><span class="msg" id="dbMsg"></span></div><p class="${window.__histSay&&window.__histSay.err?'msg err':'msg'}" id="histMsg">${window.__histSay?window.__histSay.m:(hist?`已匯入業績總覽（${esc(hist.file||"")}），截至 ${hist.cutoff}`:"尚未匯入業績總覽歷史資料")}</p>
   <div class="scroll"><table><thead><tr><th>交易日</th><th class="r">成交值（億）</th><th class="r">手收（修正後）</th><th class="r">Rebate</th><th class="r">待確認</th><th>檔案</th><th></th></tr></thead><tbody>
-  ${ds.length?ds.map(d=>{const x=days[d]||{};const f=x.files||{};return `<tr ${d===state.date?'class="done-row"':''}><td>${d}</td><td class="r">${x.gross!=null?fmtE(x.gross):'—'}</td><td class="r">${x.comm!=null?fmtN(x.comm):'—'}</td><td class="r">${x.rpt&&x.rpt.rebate!=null?fmtN(x.rpt.rebate):'—'}</td><td class="r">${x.todo!=null?(x.todo?`<span class="pending">${x.todo}</span>`:'0'):'—'}</td><td class="msg">${esc([f.conf,f.lt,f.ht,f.xp].filter(Boolean).join('、'))||(snapKeys.includes(d)?'':'只有摘要')}</td>
+  ${ds.length?ds.map(d=>{const x=days[d]||{};const f=x.files||{};return `<tr ${d===state.date?'class="done-row"':''}><td>${d}</td><td class="r">${x.gross!=null?fmtE(x.gross):'—'}</td><td class="r">${x.comm!=null?fmtN(x.comm):'—'}</td><td class="r">${x.rpt&&x.rpt.rebate!=null?fmtN(x.rpt.rebate):'—'}</td><td class="r">${x.todo!=null?(x.todo?`<span class="pending">${x.todo}</span>`:'0'):'—'}</td><td class="msg">${esc([f.conf,f.lt,f.ht,f.xp,f.ov].filter(Boolean).join('、'))||(snapKeys.includes(d)?'':'只有摘要')}</td>
    <td><button class="dbo" data-d="${d}" ${snapKeys.includes(d)?'':'disabled'}>開啟</button> <button class="dbx" data-d="${d}">刪除</button></td></tr>`;}).join(''):'<tr><td colspan="7" class="msg">還沒有資料</td></tr>'}
   </tbody></table></div>`;
   $('#p-db').querySelectorAll('.dbo').forEach(b=>b.addEventListener('click',()=>{loadDay(b.dataset.d).then(()=>showTab('report'));}));
@@ -1603,6 +1642,113 @@ async function syncBoot2(){
   if(SYNC.ok) await syncNow();
 }
 
+// ===== 用業績總覽（底稿）產生每天的報表，取代四個下單檔 =====
+// Date 欄是實際日期 → 直接切出每一天；只有月份 → 用「這次匯入 − 上次匯入」的差額當作當天
+const acNorm=a=>{ const d=String(a??'').replace(/\D/g,''); return d||String(a??'').trim(); };
+function dgDateKey(v){
+  if(v===null||v===undefined||v==='') return null;
+  if(typeof v==='number'){ if(v>=1&&v<=12&&Number.isInteger(v)) return {m:v};
+    if(v>20000){ const p=XLSX.SSF.parse_date_code(v); if(p) return {d:`${p.y}/${String(p.m).padStart(2,'0')}/${String(p.d).padStart(2,'0')}`,m:p.m}; } return null; }
+  if(v instanceof Date) return {d:`${v.getFullYear()}/${String(v.getMonth()+1).padStart(2,'0')}/${String(v.getDate()).padStart(2,'0')}`,m:v.getMonth()+1};
+  const t=String(v).trim(); if(/^\d{1,2}$/.test(t)){ const m=Number(t); return m>=1&&m<=12?{m}:null; }
+  const n=normDate(t); return /^\d{4}\/\d{2}\/\d{2}$/.test(n)?{d:n,m:Number(n.slice(5,7))}:null;
+}
+function readDg(wb){
+  const ws=wb.Sheets['底稿']; if(!ws) throw new Error('找不到「底稿」工作表。');
+  const num=v=>{const x=Number(String(v??'').replace(/,/g,'')); return isFinite(x)?x:0;};
+  const out=[]; XLSX.utils.sheet_to_json(ws,{header:1,raw:true,defval:null}).slice(1).forEach(r=>{
+    if(!r||!r[1]) return; const k=dgDateKey(r[0]); if(!k) return;
+    out.push({d:k.d||null,m:k.m,raw:String(r[1]).trim(),ac:acNorm(r[2]),turn:num(r[4]),comm:num(r[6]),research:num(r[9]),dma:(r[16]!==null&&r[16]!==undefined&&String(r[16])!=='')}); });
+  if(!out.length) throw new Error('底稿裡沒有讀到資料。');
+  return out;
+}
+const dgKey=x=>x.m+'|'+x.raw+'|'+x.ac+'|'+(x.dma?1:0);
+function dgAgg(list){ const a={}; list.forEach(x=>{ const k=dgKey(x); const o=a[k]=a[k]||{m:x.m,raw:x.raw,ac:x.ac,dma:x.dma,turn:0,comm:0,research:0}; o.turn+=x.turn; o.comm+=x.comm; o.research+=x.research; }); return a; }
+function histAgg(){ if(!hist||!hist.detail) return null; return dgAgg(hist.detail.map(d=>({m:d[0],raw:d[1],ac:acNorm(d[2]),turn:d[4]||0,comm:d[6]||0,research:d[9]||0,dma:d[13]===0}))); }
+function ovSnapRows(items){
+  return items.filter(a=>Math.abs(a.turn)>0.5||Math.abs(a.comm)>0.5).map((a,i)=>({id:i,sheet:'底稿',ac:a.ac,fid:'',name:a.raw,code:'',sym:'',stock:'',bs:'',sh:1,px:0,
+    gross:a.turn,comm:a.comm,totc:a.comm,bps:a.turn?Math.round(a.comm/a.turn*1e6)/100:0,rem:0,final:true,
+    allocs:[{party:histName(a.raw),src:a.dma?'LT':'HT',qty:1,how:'overview',tags:[a.raw,a.ac,/^\(J/.test(a.raw)?'(J)':''].filter(Boolean).join(' ')}]}));
+}
+async function saveOvDay(date,rows,fileName){
+  let prev=null; try{prev=await IDB.get(date);}catch(_){}
+  state={date,rows,assoc:{},leftovers:[],parties:[...new Set(rows.map(r=>r.allocs[0].party))],files:{ov:fileName},orders:[],extra:(prev&&prev.extra)||[],source:'overview'};
+  manual={}; state.clients=mergeExtra(finalize(state.rows,manual,alias));
+  const days=db(); days[date]=daySummary(); store.set('days',days);
+  const snap=makeSnap(); snap.source='overview'; await IDB.put(snap); if(!snapKeys.includes(date)) snapKeys.push(date);
+}
+async function canWrite(date){ let s=null; try{s=await IDB.get(date);}catch(_){} if(!s||s.source==='overview') return true; return !!($('#ovOverwrite')&&$('#ovOverwrite').checked); }
+function weekdaysBetween(a,b){ const [y1,m1,d1]=a.split('/').map(Number),[y2,m2,d2]=b.split('/').map(Number); const t=new Date(y1,m1-1,d1), e=new Date(y2,m2-1,d2); let n=0; t.setDate(t.getDate()+1); while(t<e){ if(t.getDay()%6) n++; t.setDate(t.getDate()+1);} return n; }
+function lastTradingDay(){ const t=new Date(); while(t.getDay()===0||t.getDay()===6) t.setDate(t.getDate()-1); return `${t.getFullYear()}/${String(t.getMonth()+1).padStart(2,'0')}/${String(t.getDate()).padStart(2,'0')}`; }
+async function importOvDaily(file){
+  const say=(m,err)=>{ $('#msg').dataset.hint=''; $('#msg').className=err?'msg err':'msg'; $('#msg').innerHTML=m; };
+  try{
+    say('讀取業績總覽中…');
+    const rows=readDg(XLSX.read(await file.arrayBuffer(),{type:'array'}));
+    const dated=rows.filter(x=>x.d);
+    const cut=hist&&hist.cutoff||'';
+    if(dated.length){
+      // ── 日期模式 ──
+      let cut2=cut, autoBase='';
+      if(rows.some(x=>!x.d)){ // 前面是月份、後面是日期：月份的列當作起點（截至第一個日期的前一個交易日）；比現有起點新就更新
+        const first=dated.map(x=>x.d).sort()[0]; const [y,m,dd]=first.split('/').map(Number); const t=new Date(y,m-1,dd);
+        do{ t.setDate(t.getDate()-1); }while(t.getDay()===0||t.getDay()===6);
+        const c2=`${t.getFullYear()}/${String(t.getMonth()+1).padStart(2,'0')}/${String(t.getDate()).padStart(2,'0')}`;
+        if(!hist||c2>hist.cutoff){ const old=base&&{date:base.date,mtd:{...(base.mtd||{})},ytd:{...(base.ytd||{})}};
+          await importOverview(file,c2); autoBase=c2; cut2=c2;
+          // Exchange fee、Rebate：舊起點的值 + 舊起點到新起點之間工具裡已存的每日數字（有缺的天就留空待補）
+          if(old&&old.date&&old.date<c2){ const days=db(); const mid=[]; const t2=new Date(...old.date.split('/').map((v,i)=>i===1?v-1:+v)); t2.setDate(t2.getDate()+1);
+            const e=new Date(t.getFullYear(),t.getMonth(),t.getDate());
+            for(;t2<=e;t2.setDate(t2.getDate()+1)){ if(t2.getDay()%6){ mid.push(`${t2.getFullYear()}/${String(t2.getMonth()+1).padStart(2,'0')}/${String(t2.getDate()).padStart(2,'0')}`); } }
+            const have=mid.every(d=>days[d]&&days[d].rpt&&days[d].rpt.exch!=null&&days[d].rpt.rebate!=null);
+            if(have) ['exch','rebate'].forEach(k=>{ ['mtd','ytd'].forEach(sc=>{ const sameScope=sc==='ytd'?old.date.slice(0,4)===c2.slice(0,4):old.date.slice(0,7)===c2.slice(0,7);
+              const add=mid.filter(d=>sc==='ytd'||d.slice(0,7)===c2.slice(0,7)).reduce((a,d)=>a+(days[d].rpt[k]||0),0);
+              const ov=sameScope?pn(old[sc][k]):0; if(ov!==null||!sameScope) base[sc][k]=(ov||0)+add; }); });
+            store.set('base',base); }
+        } else cut2=hist.cutoff; }
+      const dates=[...new Set(dated.map(x=>x.d))].filter(d=>!cut2||d>cut2).sort();
+      if(!dates.length) throw new Error(`底稿裡沒有 ${cut2} 之後的日期。`);
+      const done=[], skipped=[];
+      loading=true;
+      for(const d of dates){ if(!(await canWrite(d))){ skipped.push(d); continue; } await saveOvDay(d,ovSnapRows(Object.values(dgAgg(dated.filter(x=>x.d===d)))),file.name); done.push(d); }
+      loading=false;
+      if(done.length) await loadDay(done[done.length-1]);
+      const needEx=autoBase&&(pn((base.mtd||{}).exch)===null||pn((base.mtd||{}).rebate)===null||pn((base.ytd||{}).exch)===null||pn((base.ytd||{}).rebate)===null);
+      say(`${autoBase?`月份的列已設為起點（截至 ${autoBase}）；`:''}<span class="okc">✓ 已用業績總覽建立 ${done.length} 天</span>${done.length?`（${done[0]}～${done[done.length-1]}）`:''}${skipped.length?`；<span class="pending">${skipped.join('、')} 已經用四個檔案建立過，沒有覆蓋（要覆蓋請勾「覆蓋已用四個檔案建立的日期」）</span>`:''}${needEx?` <span class="pending">請到報表下方「期初累計」補填截至 ${autoBase} 的 ${[pn((base.mtd||{}).exch)===null||pn((base.ytd||{}).exch)===null?'Exchange fee':'',pn((base.mtd||{}).rebate)===null||pn((base.ytd||{}).rebate)===null?'Rebate':''].filter(Boolean).join(' 和 ')}（MTD、YTD）。</span>`:''}`);
+      return;
+    }
+    // ── 差額模式（Date 只有月份）──
+    const day=normDate(($('#ovDay')&&$('#ovDay').value.trim())||lastTradingDay());
+    if(!/^\d{4}\/\d{2}\/\d{2}$/.test(day)) throw new Error('報表日期格式不對。');
+    let prev=store.get('ovPrev',null);
+    if(!prev){ const h=histAgg();
+      if(!h){ // 第一次：這份總覽當作起點（截至報表日期），從下一個交易日開始用差額產生
+        await importOverview(file,day); store.set('ovPrev',{date:day,agg:dgAgg(rows)});
+        say(`<span class="okc">✓ 已把這份業績總覽設為起點（截至 ${day}）</span>。Date 欄只有月份，所以第一次無法切出 ${day} 當天的數字；下一個交易日更新總覽後再匯入，就會產生那一天的報表。期初累計已自動帶入，記得補填 Exchange fee 和 Rebate。`);
+        return; }
+      prev={date:hist.cutoff,agg:h}; }
+    if(day<=prev.date) throw new Error(`報表日期 ${day} 不能早於或等於上次的 ${prev.date}。`);
+    if(!(await canWrite(day))) throw new Error(`${day} 已經用四個檔案建立過。要改用業績總覽，請勾「覆蓋已用四個檔案建立的日期」。`);
+    const cur=dgAgg(rows); const prevAgg=prev.date.slice(0,4)===day.slice(0,4)?prev.agg:{};
+    const cm=Number(day.slice(5,7)); const today=[]; let adjN=0, adjT=0;
+    new Set([...Object.keys(cur),...Object.keys(prevAgg)]).forEach(k=>{
+      const c=cur[k]||{}, p=prevAgg[k]||{}; const src=cur[k]||prevAgg[k];
+      const dt=(c.turn||0)-(p.turn||0), dc=(c.comm||0)-(p.comm||0), dr=(c.research||0)-(p.research||0);
+      if(Math.abs(dt)<0.5&&Math.abs(dc)<0.5) return;
+      if(src.m===cm) today.push({...src,turn:dt,comm:dc,research:dr}); else { adjN++; adjT+=dt; }
+    });
+    const gap=weekdaysBetween(prev.date,day);
+    loading=true; await saveOvDay(day,ovSnapRows(today),file.name); loading=false;
+    store.set('ovPrev',{date:day,agg:cur});
+    await loadDay(day);
+    const neg=today.filter(x=>x.turn<-0.5).length;
+    say(`<span class="okc">✓ 已用業績總覽產生 ${day}</span>：${today.length} 列、成交值 ${fmtE(today.reduce((a,x)=>a+x.turn,0))} 億（= 這次的總覽 − ${prev.date} 的總覽）。`
+      +(gap?` <span class="pending">⚠ ${prev.date} 和 ${day} 之間還有 ${gap} 個交易日沒有匯入，那幾天的成交都會算在 ${day}。</span>`:'')
+      +(adjN?` <span class="pending">⚠ 有 ${adjN} 列是過去月份的調整（${fmtE(adjT)} 億），沒有算進今天。</span>`:'')
+      +(neg?` <span class="pending">有 ${neg} 列比上次少（負數），通常是事後調整。</span>`:''));
+  }catch(e){ loading=false; say('業績總覽產生報表失敗：'+esc(e.message),1); }
+}
+
 async function doRestore(file,say){
   try{const j=JSON.parse(await readMaybeGz(file)); if(j.tool!=='業績日報'||!j.kv) throw new Error();
     if(!confirm(`還原備份會覆蓋目前的設定，並加入 ${(j.snaps||[]).length} 天的明細。繼續？`))return;
@@ -1611,7 +1757,18 @@ async function doRestore(file,say){
   }catch(err){say('還原失敗：這不是業績日報的完整備份檔。');}
 }
 $('#bkImportTop').addEventListener('change',e=>doRestore(e.target.files[0],m=>{$('#msg').className='msg err';$('#msg').textContent=m;}));
+
+// ===== 上傳方式切換：業績總覽 / 四個檔案 =====
+function setMode(m){ document.querySelectorAll('.seg').forEach(b=>b.setAttribute('aria-selected',b.dataset.m===m));
+  $('#mode-ov').hidden=m!=='ov'; $('#mode-four').hidden=m!=='four'; try{localStorage.setItem('perfrpt-mode',m);}catch(_){}
+  if(!$('#msg').textContent||$('#msg').dataset.hint==='1'){ $('#msg').className='msg'; $('#msg').dataset.hint='1'; $('#msg').textContent=m==='ov'?'':'先放入 Trade Confirm、DMA、FOMS 三個檔案。'; } }
+document.querySelectorAll('.seg').forEach(b=>b.addEventListener('click',()=>setMode(b.dataset.m)));
+(function(){ let m='ov'; try{ m=localStorage.getItem('perfrpt-mode')||'ov'; }catch(_){} setMode(m); })();
+{ const dz=$('#ovDrop'); dz.addEventListener('dragover',e=>{e.preventDefault();dz.classList.add('drag');}); dz.addEventListener('dragleave',()=>dz.classList.remove('drag'));
+  dz.addEventListener('drop',e=>{e.preventDefault();dz.classList.remove('drag'); const f=e.dataTransfer.files[0]; if(f){ $('#ovFn').textContent=f.name; importOvDaily(f);} }); }
 async function boot(){
+  try{ $('#ovDay').value=lastTradingDay(); }catch(_){}
+  $('#ovDayFile').addEventListener('change',e=>{ const f=e.target.files[0]; e.target.value=''; if(f){ $('#ovFn').textContent=f.name; importOvDaily(f);} });
   document.querySelectorAll('.slot').forEach(sl=>sl.dataset.ph=sl.querySelector('.fn').textContent);
   const ok=await IDB.open();
   if(window.__wipeIDB&&IDB.ok){ try{ await IDB.req(IDB.db.transaction('snap','readwrite').objectStore('snap').clear()); await IDB.req(IDB.db.transaction('meta','readwrite').objectStore('meta').clear()); }catch(_){} }
