@@ -117,6 +117,26 @@ td.neg{color:var(--bad)}
 @media (max-width:820px){.rk2{grid-template-columns:1fr}}
 table.dma{max-width:420px}
 .foot{color:var(--mute);font-size:12px;margin:0}
+/* 下載圖片時放大字體（圖片寬度固定，字相對變大；排名表改成上下排，每張都用全寬） */
+#reportCard.shot{max-width:1200px;width:1200px;padding:30px 28px;overflow:visible}
+#reportCard.shot .rp-head{border-bottom-width:3px;padding-bottom:10px;margin-bottom:18px}
+#reportCard.shot .rp-head h2{font-size:40px}
+#reportCard.shot .rp-head span{font-size:24px}
+#reportCard.shot table,#reportCard.shot table.brk{font-size:30px;margin-bottom:24px}
+#reportCard.shot td,#reportCard.shot th{padding:10px 10px}
+#reportCard.shot th{font-size:22px}
+#reportCard.shot table.kpi td.lbl{width:215px}
+#reportCard.shot table.kpi td.lbl b{font-size:26px}
+#reportCard.shot table.kpi td.lbl span,#reportCard.shot table.kpi td.sub{font-size:21px}
+#reportCard.shot table.kpi td.sub{width:190px}
+#reportCard.shot .rk2{grid-template-columns:1fr;gap:6px}
+#reportCard.shot table.dma{max-width:none;width:100%}
+#reportCard.shot .foot,#reportCard.shot .rcgrid{font-size:19px}
+#reportCard.shot h3{font-size:32px;margin-bottom:12px}
+#reportCard.shot .rk-title{font-size:30px;margin:10px 0 10px}
+#reportCard.shot .rk4 th:nth-child(1),#reportCard.shot .rk4 td:nth-child(1){width:120px}
+#reportCard.shot .rk4 th:nth-child(3),#reportCard.shot .rk4 td:nth-child(3){width:220px}
+#reportCard.shot .rk4 th:nth-child(4),#reportCard.shot .rk4 td:nth-child(4){width:170px}
 #reportInputs{max-width:900px;margin-top:16px}
 #reportInputs details{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:10px 16px;margin-bottom:10px}
 #reportInputs summary{cursor:pointer;font-weight:600;padding:4px 0}
@@ -1235,7 +1255,8 @@ function renderInputs(R){
 function reportRpt(){const v=todayVals();return {turn:v.turn,comm:v.comm,exch:v.exch,rebate:v.rebate,mkt:v.mkt,fb:v.fb,fs:v.fs,dma:v.dma}}
 async function reportPng(){
   const el=$('#reportCard');
-  const c=await html2canvas(el,{scale:2,backgroundColor:getComputedStyle(el).backgroundColor});
+  el.classList.add('shot'); let c;
+  try{ c=await html2canvas(el,{scale:2,backgroundColor:getComputedStyle(el).backgroundColor,windowWidth:1400}); } finally{ el.classList.remove('shot'); }
   const blob=await new Promise(r=>c.toBlob(r,'image/png')); await saveFile(`業務達成情況_${state.date.replace(/\//g,'')}.png`,blob);
 }
 function reportSheet(){
@@ -1694,7 +1715,8 @@ async function importOvDaily(file){
         const first=dated.map(x=>x.d).sort()[0]; const [y,m,dd]=first.split('/').map(Number); const t=new Date(y,m-1,dd);
         do{ t.setDate(t.getDate()-1); }while(t.getDay()===0||t.getDay()===6);
         const c2=`${t.getFullYear()}/${String(t.getMonth()+1).padStart(2,'0')}/${String(t.getDate()).padStart(2,'0')}`;
-        if(!hist||c2>hist.cutoff){ const old=base&&{date:base.date,mtd:{...(base.mtd||{})},ytd:{...(base.ytd||{})}};
+        const baseOff=normDate(base&&base.date)!==c2||pn(((base&&base.mtd)||{}).turn)===null||pn(((base&&base.ytd)||{}).turn)===null; // 期初跟業績總覽對不上（例如被舊資料蓋掉）也重新帶入
+        if(!hist||c2>hist.cutoff||baseOff){ const old=base&&{date:base.date,mtd:{...(base.mtd||{})},ytd:{...(base.ytd||{})}};
           await importOverview(file,c2); autoBase=c2; cut2=c2;
           // Exchange fee、Rebate：舊起點的值 + 舊起點到新起點之間工具裡已存的每日數字（有缺的天就留空待補）
           if(old&&old.date&&old.date<c2){ const days=db(); const mid=[]; const t2=new Date(...old.date.split('/').map((v,i)=>i===1?v-1:+v)); t2.setDate(t2.getDate()+1);
