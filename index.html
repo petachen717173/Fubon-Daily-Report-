@@ -581,7 +581,7 @@ async function saveFile(filename,blob,sayEl){
 }
 
 const files={}; const wbs={};
-const BIGKEY=/^(days$|mktHist$|hist$|ovPrev$|mkt:|brk:|mkfetch:)/;   // 會越存越多的資料：放 IndexedDB（空間大），不放 localStorage（只有 5 MB 且同網域共用）
+const BIGKEY=/^(days$|mktHist$|mktMonths$|hist$|ovPrev$|mkt:|brk:|mkfetch:)/;   // 會越存越多的資料：放 IndexedDB（空間大），不放 localStorage（只有 5 MB 且同網域共用）
 const store={
   mem:{}, pend:{},
   get(k,d){ if(k in store.mem) return store.mem[k]; try{const v=localStorage.getItem('perfrpt:'+k);return v?JSON.parse(v):d}catch(e){return d} },
@@ -910,6 +910,7 @@ function todayVals(){
 }
 // ===== 匯入「市場狀況」Excel（巨集抓的每日市場資料）=====
 let mktHist=store.get('mktHist',{}); // 'YYYY/MM/DD' -> {mkt,fb,fs}
+let mktMonths=store.get('mktMonths',{}); // 'YYYY/MM' -> {mkt（單邊）,fini（買+賣）}，來自 Market Share 檔的年度分頁
 function xlDateKey(v){
   if(v==null||v==='') return null;
   if(typeof v==='number'){ const p=XLSX.SSF.parse_date_code(v); if(!p) return null; return `${p.y}/${String(p.m).padStart(2,'0')}/${String(p.d).padStart(2,'0')}`; }
@@ -920,6 +921,16 @@ function xlDateKey(v){
 function parseMarketBook(wb){
   for(const sn of wb.SheetNames){
     const rows=XLSX.utils.sheet_to_json(wb.Sheets[sn],{header:1,raw:true,defval:null});
+    // Market Share 檔的「FINI Turnover」分頁：集買／集賣／櫃買／櫃賣 + Market 下的「集」「櫃」
+    const fi=rows.findIndex(r=>r&&r.some(c=>String(c??'').trim()==='集買')&&r.some(c=>String(c??'').trim()==='櫃賣')&&r.some(c=>String(c??'').trim()==='集')&&r.some(c=>String(c??'').trim()==='櫃'));
+    if(fi>=0){ const h=rows[fi].map(c=>String(c??'').trim()); const ix=n=>h.indexOf(n);
+      const c={tb:ix('集買'),ts:ix('集賣'),ob:ix('櫃買'),os:ix('櫃賣'),ta:ix('集'),oa:ix('櫃')}; const out={};
+      rows.slice(fi+1).forEach(r=>{ if(!r) return; const d=xlDateKey(r[0]); if(!d) return;
+        const n=k=>{ const v=r[c[k]]; if(v===null||v===undefined||v==='') return null; const x=Number(String(v).replace(/,/g,'')); return isFinite(x)?x:null; };
+        const tb=n('tb'),ts=n('ts'),ob=n('ob'),os=n('os'),ta=n('ta'),oa=n('oa');
+        if([tb,ts,ob,os,ta,oa].some(v=>v===null)||!(ta+oa>0)||!(tb+ob+ts+os>0)) return;
+        out[d]={mkt:ta+oa,fb:tb+ob,fs:ts+os}; });
+      if(Object.keys(out).length) return out; }
     const hi=rows.findIndex(r=>r&&r.some(c=>String(c||'').trim()==='集買')&&r.some(c=>String(c||'').includes('集中總金額')));
     if(hi<0) continue;
     const h=rows[hi].map(c=>String(c||'').trim()); const ix=n=>h.findIndex(c=>c===n||c.includes(n));
@@ -934,13 +945,44 @@ function parseMarketBook(wb){
     });
     return out;
   }
-  throw new Error('找不到市場資料：需要有「集買、集賣、櫃買、櫃賣、集中總金額、櫃台總金額」這幾欄的工作表。');
+  throw new Error('找不到市場資料：請上傳 Market Share 檔（FINI Turnover 分頁）或市場狀況 Excel（集買、集賣、櫃買、櫃賣、集中總金額、櫃台總金額）。');
 }
 // MTD / YTD 的市場資料：如果匯入的歷史從月初／年初連續到今天，就直接加總
+// Market Share 檔的年度分頁（例如「2026」）：每月一列 JAN～DEC，有 Market Turnover（雙邊）和 FINI（買+賣）
+function parseMarketMonths(wb){
+  const out={};
+  for(const sn of wb.SheetNames){ if(!/^\d{4}$/.test(sn.trim())) continue; const y=sn.trim();
+    const rows=XLSX.utils.sheet_to_json(wb.Sheets[sn],{header:1,raw:true,defval:null});
+    const hi=rows.findIndex(r=>r&&r.some(c=>String(c??'').trim()==='Market Turnover'));
+    if(hi<0) continue; const h=rows[hi].map(c=>String(c??'').trim()); const cm=h.indexOf('Market Turnover'); const cf=h.findIndex((c,i)=>i>cm&&c==='FINI'); if(cf<0) continue;
+    const MON=['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'];
+    rows.slice(hi+1).forEach(r=>{ if(!r) return; const i=MON.indexOf(String(r[0]??'').trim()); if(i<0) return;
+      const mk=Number(r[cm]), fi=Number(r[cf]); if(!(mk>0)||!(fi>0)) return;
+      out[y+'/'+String(i+1).padStart(2,'0')]={mkt:mk/2,fini:fi}; });
+  }
+  return out;
+}
 function histSum(scope,d){
+  const r=histSumDaily(scope,d); if(r||scope!=='ytd') return r;
+  // YTD：之前的月份用年度分頁的月合計，這個月用每天的資料
+  const cur=histSumDaily('mtd',d); if(!cur) return null; const y=d.slice(0,4), m=+d.slice(5,7); const s={...cur};
+  for(let i=1;i<m;i++){ const mm=mktMonths[y+'/'+String(i).padStart(2,'0')]; if(!mm) return null; s.mkt+=mm.mkt; s.fb+=mm.fini; }
+  return s;
+}
+function histSumDaily(scope,d){
   const ym=d.slice(0,7), y=d.slice(0,4);
   const ks=Object.keys(mktHist).filter(x=>x<=d&&(scope==='mtd'?x.slice(0,7)===ym:x.slice(0,4)===y)).sort();
-  if(!ks.length||!mktHist[d]) return null;
+  if(!mktHist[d]){
+    // Market Share 檔通常晚一天：檔案到前一個交易日，今天用手動輸入的 FINI／市場成交值補上
+    const m=(state&&state.date===d)?todayInput():store.get('mkt:'+d,{});
+    if([m.fb,m.fs,m.mkt].some(v=>v===null||v===undefined||v==='')) return null;
+    const today={mkt:Number(m.mkt),fb:Number(m.fb),fs:Number(m.fs)};
+    if(!ks.length) return (scope==='mtd'&&tradingDays('mtd',d)===1)?today:null;
+    if(ks[ks.length-1]!==prevTradingDay(d)) return null;
+    const [ey0,em0,ed0]=ks[0].split('/').map(Number); if(scope==='mtd'?ed0>5:(em0!==1||ed0>7)) return null;
+    const s={...today}; ks.forEach(k=>{s.mkt+=mktHist[k].mkt;s.fb+=mktHist[k].fb;s.fs+=mktHist[k].fs;}); return s;
+  }
+  if(!ks.length) return null;
   const [ey,em,ed]=ks[0].split('/').map(Number);
   if(scope==='mtd'?ed>5:(em!==1||ed>7)) return null;
   const s={mkt:0,fb:0,fs:0}; ks.forEach(k=>{s.mkt+=mktHist[k].mkt;s.fb+=mktHist[k].fb;s.fs+=mktHist[k].fs;}); return s;
@@ -951,9 +993,10 @@ async function importMarketBook(file,say){
     const h=parseMarketBook(wb); const ds=Object.keys(h).sort();
     if(!ds.length) throw new Error('檔案裡沒有讀到任何一天的市場資料。');
     mktHist={...mktHist,...h}; store.set('mktHist',mktHist);
+    const mm=parseMarketMonths(wb); const mks=Object.keys(mm).sort(); if(mks.length){ mktMonths={...mktMonths,...mm}; store.set('mktMonths',mktMonths); }
     ds.forEach(d=>{ const k='mkt:'+d; const m=store.get(k,{fb:null,fs:null,mkt:null,exch:null,rebate:null,adjTurn:0,adjComm:0}); m.fb=h[d].fb; m.fs=h[d].fs; m.mkt=h[d].mkt; store.set(k,m); });
     const has=state&&h[state.date];
-    say(`<span class="okc">✓ 已匯入 ${ds.length} 天的市場資料（${ds[0]}～${ds[ds.length-1]}）</span>${state?(has?'':`<span class="pending">，但沒有 ${state.date} 這一天，請先在 Excel 執行巨集更新</span>`):''}`);
+    say(`<span class="okc">✓ 已匯入 ${ds.length} 天的市場資料（${ds[0]}～${ds[ds.length-1]}）${mks.length?`，以及 ${mks[0].slice(0,4)} 年 ${+mks[0].slice(5)}～${+mks[mks.length-1].slice(5)} 月的月合計`:''}</span>${state?(has?'':`<span class="pending">；檔案還沒有 ${state.date}，請在下面手動填今天的 FINI 買進、賣出、市場成交值，MTD／YTD 會用檔案＋今天</span>`):''}`);
     persist();
   }catch(e){ say(`<span class="pending">${esc(e.message)}</span>`); }
 }
@@ -1129,6 +1172,8 @@ function tradingDays(scope,d){ // 從月初／年初到 d（含）的交易日�
   const [y,m,dd]=d.split('/').map(Number); const t=new Date(y,scope==='mtd'?m-1:0,1), e=new Date(y,m-1,dd); const H=holiSet(); let n=0;
   for(;t<=e;t.setDate(t.getDate()+1)){ if(t.getDay()%6===0) continue; const k=`${t.getFullYear()}/${String(t.getMonth()+1).padStart(2,'0')}/${String(t.getDate()).padStart(2,'0')}`; if(!H.has(k)) n++; }
   return n; }
+function prevTradingDay(d){ const [y,m,dd]=d.split('/').map(Number); const t=new Date(y,m-1,dd); const H=holiSet();
+  for(let i=0;i<40;i++){ t.setDate(t.getDate()-1); if(t.getDay()%6===0) continue; const k=`${t.getFullYear()}/${String(t.getMonth()+1).padStart(2,'0')}/${String(t.getDate()).padStart(2,'0')}`; if(!H.has(k)) return k; } return ''; }
 function cumulate(scope){ // scope 'mtd' | 'ytd'
   const d=state.date, ym=d.slice(0,7), y=d.slice(0,4);
   const inScope=x=>scope==='mtd'?x.slice(0,7)===ym:x.slice(0,4)===y;
@@ -1234,9 +1279,10 @@ function inp(id,val,ph=''){return `<input type="text" inputmode="decimal" class=
 function renderInputs(R){
   const m=todayInput();
   const missM=[...cumulate('mtd').missing], missY=[...cumulate('ytd').missing];
+  const msCover=!!(state&&histSum('mtd',state.date)&&histSum('ytd',state.date)); // Market Share 已涵蓋 MTD／YTD 的市場與 FINI
   const nm=Object.fromEntries(FIELDS);
   $('#reportInputs').innerHTML=`
-  <details open><summary>本日市場資料與費用（${state.date}，依日期記住）</summary><div class="mkimp"><label class="btn">匯入市場狀況 Excel<input type="file" id="mkBook" accept=".xlsm,.xlsx,.xls" hidden></label><span class="msg" id="mkBookMsg">${Object.keys(mktHist).length?`已有 ${Object.keys(mktHist).length} 天市場資料（到 ${Object.keys(mktHist).sort().pop()}）`:''}</span></div><div class="grid">
+  <details open><summary>本日市場資料與費用（${state.date}，依日期記住）</summary><div class="mkimp"><label class="btn">匯入 Market Share／市場狀況 Excel<input type="file" id="mkBook" accept=".xlsm,.xlsx,.xls" hidden></label><span class="msg" id="mkBookMsg">${Object.keys(mktHist).length?`已有 ${Object.keys(mktHist).length} 天市場資料（到 ${Object.keys(mktHist).sort().pop()}）`:''}</span></div><div class="grid">
     <label>FINI 買進（元）${inp('m.fb',m.fb)}</label><label>FINI 賣出（元）${inp('m.fs',m.fs)}</label><label>市場成交值（元）${inp('m.mkt',m.mkt)}</label>
     <label>Exchange fee 手動覆寫（留空＝成交值 × 費率）${inp('m.exch',m.exch,exchFeeRate!=null?f0(Math.round((totals().gross+(m.adjTurn||0)*1e8)*exchFeeRate)):'')}</label><label>Exchange fee 費率（%）<input type="text" class="num" data-f="r.exch" value="${exchFeeRate!=null?+(exchFeeRate*100).toPrecision(6):''}" placeholder="0.00665"></label><label>Rebate 手動覆寫（留空＝依規則）${inp('m.rebate',m.rebate,f0(calcRebate().total))}</label><span></span>
     <label>其他成交值調整（億）${inp('m.adjTurn',m.adjTurn,'0')}</label><label>其他手收調整${inp('m.adjComm',m.adjComm,'0')}</label>
@@ -1246,13 +1292,13 @@ function renderInputs(R){
     <label>每日交易值目標（億）${inp('t.turnD',targets.turnD)}</label><label>每日手收目標${inp('t.commD',targets.commD)}</label><label>每億手收目標（自動）<input type="text" disabled value="${targets.turnD?f0(targets.commD/targets.turnD):''}"></label>
   </div>
   <label class="holi">休市日（平日扣掉這些日期就是交易日；颱風假等臨時休市請加在這裡）<textarea data-f="h.list" rows="2">${esc(holidays)}</textarea></label></details>
-  <details ${missM.length||missY.length?'open':''}><summary>期初累計${missM.length||missY.length?'<span class="pending"> ・ MTD / YTD 有欄位缺資料</span>':''}</summary>
-  ${hist?`<div class="mkimp"><button id="histBase">用業績總覽帶入（截至 ${hist.cutoff}）</button><span class="msg">Exchange fee、Rebate 需要手動填</span></div>`:''}
+  ${''}<details ${missM.length||missY.length?'open':''}><summary>期初累計${missM.length||missY.length?'<span class="pending"> ・ MTD / YTD 有欄位缺資料</span>':''}</summary>
+  ${hist?`<div class="mkimp"><button id="histBase">用業績總覽帶入（截至 ${hist.cutoff}）</button><span class="msg">Rebate 需要手動填</span></div>`:''}
   <div class="grid"><label>累計截止日（YYYY/MM/DD）<input type="text" class="num" data-f="b.date" value="${esc(base.date)}" placeholder="2026/10/20"></label>
     <label>MTD 交易日數（自動）<input type="text" disabled value="${state?tradingDays('mtd',state.date):''}"></label><label>YTD 交易日數（自動）<input type="text" disabled value="${state?tradingDays('ytd',state.date):''}"></label></div>
   <div class="scroll" style="margin-top:8px"><table class="btab"><thead><tr><th>項目</th><th>MTD 累計</th><th>YTD 累計</th></tr></thead><tbody>
-   ${FIELDS.map(([k,n])=>`<tr><td>${n}${missM.includes(k)||missY.includes(k)?' <span class="pending">缺</span>':''}</td><td>${inp('b.mtd.'+k,base.mtd[k])}</td><td>${inp('b.ytd.'+k,base.ytd[k])}</td></tr>`).join('')}
-  </tbody></table></div></details>`;
+   ${FIELDS.filter(([k])=>!(msCover&&['mkt','fb','fs'].includes(k))).map(([k,n])=>`<tr><td>${n}${missM.includes(k)||missY.includes(k)?' <span class="pending">缺</span>':''}</td><td>${inp('b.mtd.'+k,base.mtd[k])}</td><td>${inp('b.ytd.'+k,base.ytd[k])}</td></tr>`).join('')}
+  </tbody></table></div>${msCover?`<p class="msg" style="margin:8px 2px 0">市場成交值、FINI 買進／賣出：MTD、YTD 都用 Market Share 檔（資料到 ${Object.keys(mktHist).sort().pop()}），這裡不用填。</p>`:''}</details>`;
   {const ht=$('#reportInputs').querySelector('textarea[data-f="h.list"]'); if(ht) ht.addEventListener('change',()=>{ holidays=ht.value; store.set('holidays',holidays); const open=[...$('#reportInputs').querySelectorAll('details')].map(x=>x.open); renderReport(); [...$('#reportInputs').querySelectorAll('details')].forEach((x,j)=>x.open=open[j]); persist(); });}
   {const hb=$('#histBase'); if(hb) hb.addEventListener('click',()=>{ applyHistBase(); const open=[...$('#reportInputs').querySelectorAll('details')].map(x=>x.open); renderReport(); [...$('#reportInputs').querySelectorAll('details')].forEach((x,j)=>x.open=open[j]); persist(); });}
   {const mb=$('#mkBook'); if(mb) mb.addEventListener('change',e=>{const f=e.target.files[0]; e.target.value=''; if(!f)return; importMarketBook(f,m=>{ const open=[...$('#reportInputs').querySelectorAll('details')].map(x=>x.open); renderReport(); [...$('#reportInputs').querySelectorAll('details')].forEach((x,j)=>x.open=open[j]); $('#mkBookMsg').innerHTML=m; });});}
@@ -1645,7 +1691,7 @@ async function syncNow(reloadIfChanged=true){
 }
 async function applyPulled(){
   savedMap=store.get('acmap',{}); alias=store.get('alias',{});
-  targets=store.get('targets',targets); base=store.get('base',base);
+  targets=store.get('targets',targets); base=store.get('base',base); mktHist=store.get('mktHist',mktHist); mktMonths=store.get('mktMonths',mktMonths); hist=store.get('hist',hist); histIndex=null;
   rules=store.get('rebateRules',null)||rules; exchRate=store.get('exchRate',exchRate); brkMap=store.get('brkMap',null)||brkMap;
   snapKeys=(await IDB.keys().catch(()=>[])).map(String); fillDaySel();
   const want=(state&&state.date&&snapKeys.includes(state.date))?state.date:allDates().filter(d=>snapKeys.includes(d))[0];
@@ -1808,7 +1854,7 @@ async function boot(){
   document.querySelectorAll('.slot').forEach(sl=>sl.dataset.ph=sl.querySelector('.fn').textContent);
   const ok=await IDB.open();
   if(window.__wipeIDB&&IDB.ok){ try{ await IDB.req(IDB.db.transaction('snap','readwrite').objectStore('snap').clear()); await IDB.req(IDB.db.transaction('meta','readwrite').objectStore('meta').clear()); }catch(_){} }
-  await kvLoad(); mktHist=store.get('mktHist',{}); hist=store.get('hist',null); histIndex=null;
+  await kvLoad(); mktHist=store.get('mktHist',{}); mktMonths=store.get('mktMonths',{}); hist=store.get('hist',null); histIndex=null;
   snapKeys=(await IDB.keys().catch(()=>[])).map(String);
   fillDaySel();
   await syncBoot();
